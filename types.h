@@ -1,6 +1,8 @@
 #ifndef GEN2_SRQ__TEST_TYPE_H
 #define GEN2_SRQ__TEST_TYPE_H
 
+#include "get_clock.h"
+
 #define IB_PORT 1
 #define DEF_NUM_SGE 1
 #define DEF_BATCH_SIZE 1
@@ -56,6 +58,13 @@ struct sync_qp_info_t {
 	uint32_t	lid;
 } __attribute__ ((packed));
 
+struct measure_t {
+	uint32_t batch_samples;
+	cycles_t min;
+	cycles_t max;
+	cycles_t tot;
+};
+
 struct resources_t {
 	struct VL_sock_t	sock;
 	struct hca_data_t	*hca_p;
@@ -67,6 +76,7 @@ struct resources_t {
 	struct ibv_sge		*sge_arr;
 	struct ibv_send_wr	*send_wr_arr;
 	struct ibv_wc		*wc_arr;
+	struct measure_t	measure;
 };
 
 #endif /* GEN2_SRQ__TEST_TYPE_H */
