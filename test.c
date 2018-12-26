@@ -1,5 +1,6 @@
 #include <vl.h>
 #include "types.h"
+#include "get_clock.h"
 
 extern struct config_t config;
 
@@ -227,6 +228,23 @@ int prepare_receiver(struct resources_t *resource)
 	return SUCCESS;
 }
 
+static inline int old_post_send(struct resources_t *resource, uint16_t batch_size)
+{
+
+	struct ibv_send_wr *bad_wr = NULL;
+	int rc;
+
+	set_send_wr(resource, resource->send_wr_arr, batch_size);
+
+	rc = ibv_post_send(resource->qp, resource->send_wr_arr, &bad_wr);
+	if (rc) {
+		VL_MISC_ERR(("in ibv_post_send (%s)", strerror(rc)));
+		return FAIL;
+	}
+
+	return SUCCESS;
+}
+
 static int do_sender(struct resources_t *resource)
 {
 	uint32_t tot_ccnt = 0;
@@ -238,21 +256,38 @@ static int do_sender(struct resources_t *resource)
 		int rc = 0;
 
 		if ((tot_scnt < config.num_of_iter) && (outstanding < config.ring_depth)) {
-			struct ibv_send_wr *bad_wr = NULL;
 			uint32_t left = config.num_of_iter - tot_scnt;
 			uint16_t batch;
+			cycles_t t1;
+			cycles_t t2;
+			cycles_t delta;
 
 			batch = (config.ring_depth - outstanding) >= config.batch_size ?
 				(left >= config.batch_size ? config.batch_size : 1) : 1 ;
 
-			set_send_wr(resource, resource->send_wr_arr, batch);
+			t1 = get_cycles();
+			rc = old_post_send(resource, batch);
+			t2 = get_cycles();
 
-			rc = ibv_post_send(resource->qp, resource->send_wr_arr, &bad_wr);
 			if (rc) {
-				VL_MISC_ERR(("in ibv_post_send (%s)", strerror(rc)));
+				VL_MISC_ERR(("Failed to post send"));
 				result = FAIL;
 				goto out;
 			}
+
+			delta = t2 - t1;
+
+			if (batch == config.batch_size) {
+				if (resource->measure.min > delta)
+					resource->measure.min = delta;
+
+				if (resource->measure.max < delta)
+					resource->measure.max = delta;
+
+				resource->measure.batch_samples++;
+			}
+
+			resource->measure.tot += delta;
 
 			tot_scnt += batch;
 		}
@@ -376,6 +411,8 @@ int do_test(struct resources_t *resource)
 	if (!config.is_daemon) {
 		VL_DATA_TRACE(("Run sender"));
 
+		resource->measure.min = ~0; //initialize to max value of unsigned type
+
 		if (VL_sock_sync_ready(&resource->sock)) {
 			VL_SOCK_ERR(("Sync before traffic"));
 			return FAIL;
@@ -402,3 +439,30 @@ int do_test(struct resources_t *resource)
 	return SUCCESS;
 }
 
+int print_results(struct resources_t *resource)
+{
+	double max;
+	double min;
+	double average;
+	double freq;
+
+	freq = get_cpu_mhz(1) / 1000; //Ghz
+	if ((freq == 0)) {
+		VL_MISC_ERR(("Can't produce a report"));
+		return FAIL;
+	}
+
+	max = resource->measure.max / freq; //ns
+	min = resource->measure.min / freq; //ns
+	average = resource->measure.tot / freq / config.num_of_iter; // time per message (not per batch) [ns].
+
+	VL_MISC_TRACE((" ---------------------- Test Results  ---------------"));
+	VL_MISC_TRACE((" Batch (size: %u) was sampled %u times", config.batch_size, resource->measure.batch_samples));
+	VL_MISC_TRACE((" Max batch time:                %lf[ns]", max));
+	VL_MISC_TRACE((" Min batch time:                %lf[ns]", min));
+	VL_MISC_TRACE((" Average time per message:      %lf[ns]", average));
+	VL_MISC_TRACE((" ----------------------------------------------------"));
+
+	return SUCCESS;
+
+}

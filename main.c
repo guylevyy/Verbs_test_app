@@ -240,6 +240,11 @@ int main(
 	rc = do_test(&resource);
 	CHECK_RC(rc, "do_test");
 
+	if (!config.is_daemon) {
+		rc = print_results(&resource);
+		CHECK_RC(rc, "print_results");
+	}
+
 cleanup:
 	if (config.wait)
 		VL_keypress_wait();
