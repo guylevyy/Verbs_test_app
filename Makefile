@@ -2,7 +2,7 @@ CC = gcc
 CFLAGS += -g -O2 -Wall -W
 #-Werror
 LDFLAGS += -libverbs -lvl -lpthread
-OBJECTS = main.o resources.o test.o
+OBJECTS = main.o resources.o test.o get_clock.o
 TARGETS = post_send_test
 
 all: $(TARGETS)
@@ -16,7 +16,10 @@ main.o: main.c types.h test.h resources.h
 resources.o: resources.c resources.h types.h
 	$(CC) -c $(CFLAGS) $<
 
-test.o: test.c test.h types.h resources.h
+test.o: test.c test.h types.h resources.h get_clock.h
+	$(CC) -c $(CFLAGS) $<
+
+get_clock.o: get_clock.c get_clock.h
 	$(CC) -c $(CFLAGS) $<
 
 clean:
