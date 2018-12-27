@@ -175,7 +175,7 @@ static int init_cq(struct resources_t *resource)
 		return FAIL;
 	}
 
-	VL_DATA_TRACE(("Finish init CQ"));
+	VL_DATA_TRACE1(("Finish init CQ"));
 
 	return SUCCESS;
 }
@@ -207,7 +207,7 @@ static int init_qp(struct resources_t *resource)
 
 	VL_DATA_TRACE1(("QP num 0x%x was created", resource->qp->qp_num));
 
-	VL_DATA_TRACE(("Finish init QP"));
+	VL_DATA_TRACE1(("Finish init QP"));
 	return SUCCESS;
 }
 
@@ -221,13 +221,13 @@ static int init_mr(struct resources_t *resource)
 		return FAIL;
 	}
 
-	VL_MEM_TRACE((" MR created, addr = %p, size = %d, lkey = 0x%x",
+	VL_MEM_TRACE1((" MR created, addr = %p, size = %d, lkey = 0x%x",
 				resource->mr->addr,
 				config.msg_sz,
 				resource->mr->ibv_mr->lkey));
 
 
-	VL_MEM_TRACE(("Finish init MR"));
+	VL_MEM_TRACE1(("Finish init MR"));
 
 	return SUCCESS;
 }
@@ -264,7 +264,7 @@ static int destroy_all_mr(struct resources_t *resource)
 		VL_FREE(resource->mr);
 	}
 
-	VL_MEM_TRACE(("Finish destroy all MR."));
+	VL_MEM_TRACE1(("Finish destroy all MR."));
 	return result1;
 }
 
@@ -279,7 +279,7 @@ static int destroy_qp(struct resources_t *resource)
 	rc = ibv_destroy_qp(resource->qp);
 	CHECK_VALUE("ibv_destroy_qp", rc, 0, return FAIL);
 
-	VL_DATA_TRACE(("Finish destroy QP."));
+	VL_DATA_TRACE1(("Finish destroy QP."));
 
 	return SUCCESS;
 }
@@ -296,7 +296,7 @@ static int destroy_cq(struct resources_t *resource)
 	rc = ibv_destroy_cq(resource->cq);
 	CHECK_VALUE("ibv_destroy_cq", rc, 0, return FAIL);
 
-	VL_DATA_TRACE(("Finish destroy CQ."));
+	VL_DATA_TRACE1(("Finish destroy CQ."));
 
 	return SUCCESS;
 }
@@ -316,7 +316,7 @@ static int destroy_pd(struct resources_t *resource)
 
 	}
 
-	VL_HCA_TRACE(("Finish destroy PD."));
+	VL_HCA_TRACE1(("Finish destroy PD."));
 
 	return SUCCESS;
 }
@@ -338,7 +338,7 @@ static int destroy_hca(struct resources_t *resource)
 	}
 
 	VL_FREE(resource->hca_p);
-	VL_HCA_TRACE(("Finish destroy HCA."));
+	VL_HCA_TRACE1(("Finish destroy HCA."));
 	return result1;
 }
 
