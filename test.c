@@ -195,6 +195,16 @@ static inline void set_recv_wr(struct resources_t *resource,
 	wr[size - 1].next = NULL;
 }
 
+static inline void fast_set_recv_wr(struct ibv_recv_wr *wr, uint16_t size)
+{
+	int i;
+
+	wr[size - 1].next = NULL;
+
+	for (i = 0; i < size - 1; i++)
+		wr[i].next = &wr[i + 1];
+}
+
 int prepare_receiver(struct resources_t *resource)
 {
 	int i;
@@ -212,6 +222,8 @@ int prepare_receiver(struct resources_t *resource)
 		}
 	}
 
+	set_recv_wr(resource, resource->recv_wr_arr, config.batch_size);
+
 	return SUCCESS;
 }
 
@@ -222,12 +234,18 @@ static int do_sender(struct resources_t *resource)
 	int result = SUCCESS;
 
 	while (tot_ccnt < config.num_of_iter) {
+		uint16_t outstanding = tot_scnt - tot_ccnt;
 		int rc = 0;
 
-		if ((tot_scnt < config.num_of_iter) && (tot_scnt - tot_ccnt < config.ring_depth)) {
+		if ((tot_scnt < config.num_of_iter) && (outstanding < config.ring_depth)) {
 			struct ibv_send_wr *bad_wr = NULL;
+			uint32_t left = config.num_of_iter - tot_scnt;
+			uint16_t batch;
 
-			set_send_wr(resource, resource->send_wr_arr, config.batch_size);
+			batch = (config.ring_depth - outstanding) >= config.batch_size ?
+				(left >= config.batch_size ? config.batch_size : 1) : 1 ;
+
+			set_send_wr(resource, resource->send_wr_arr, batch);
 
 			rc = ibv_post_send(resource->qp, resource->send_wr_arr, &bad_wr);
 			if (rc) {
@@ -236,7 +254,7 @@ static int do_sender(struct resources_t *resource)
 				goto out;
 			}
 
-			tot_scnt += config.batch_size;
+			tot_scnt += batch;
 		}
 
 		rc = ibv_poll_cq(resource->cq, config.batch_size, resource->wc_arr);
@@ -272,6 +290,7 @@ static int do_receiver(struct resources_t *resource)
 	int result = SUCCESS;
 
 	while (tot_ccnt < config.num_of_iter) {
+		uint16_t outstanding;
 		int rc = 0;
 
 		rc = ibv_poll_cq(resource->cq, config.batch_size, resource->wc_arr);
@@ -293,8 +312,17 @@ static int do_receiver(struct resources_t *resource)
 			goto out;
 		}
 
-		if ((tot_rcnt < config.num_of_iter) && (tot_rcnt - tot_ccnt < config.ring_depth)) {
+		outstanding = tot_rcnt - tot_ccnt;
+
+		if ((tot_rcnt < config.num_of_iter) && (outstanding < config.ring_depth)) {
 			struct ibv_recv_wr *bad_wr = NULL;
+			uint32_t left = config.num_of_iter - tot_rcnt;
+			uint16_t batch;
+
+			batch = (config.ring_depth - outstanding) >= config.batch_size ?
+				(left >= config.batch_size ? config.batch_size : 1) : 1 ;
+
+			fast_set_recv_wr(resource->recv_wr_arr, batch);
 
 			rc = ibv_post_recv(resource->qp, resource->recv_wr_arr, &bad_wr);
 			if (rc) {
@@ -303,7 +331,7 @@ static int do_receiver(struct resources_t *resource)
 				goto out;
 			}
 
-			tot_rcnt += config.batch_size;
+			tot_rcnt += batch;
 		}
 	}
 
