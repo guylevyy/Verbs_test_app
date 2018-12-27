@@ -70,6 +70,13 @@ struct VL_usage_descriptor_t usage_descriptor[] = {
 	},
 
 	{
+		'b', "batch", "BATCH",
+		"WRs list size to post",
+#define BATCH_CMD_CASE				15
+		BATCH_CMD_CASE
+	},
+
+	{
 		't', "qp_type", "QP_TYPE",
 		"Enforce QPs type (Default: RC)",
 #define QP_TYPE_CMD_CASE			16
@@ -150,6 +157,10 @@ static int process_arg(
 
 	case TCP_CMD_CASE:
 		config.tcp = strtoul(equ_ptr, NULL, 0);
+		break;
+
+	case BATCH_CMD_CASE:
+		config.batch_size = strtoul(equ_ptr, NULL, 0);
 		break;
 
 	case QP_TYPE_CMD_CASE:
