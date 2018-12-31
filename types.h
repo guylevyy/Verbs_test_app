@@ -33,6 +33,7 @@ struct config_t {
 	char			ip[VL_IP_STR_LENGTH+1];
 	int			tcp;
 	int			is_daemon;
+	int			new_api;
 	int			wait;
 	int			qp_type;
 	size_t			msg_sz;
@@ -71,6 +72,7 @@ struct resources_t {
 	struct ibv_pd		*pd;
 	struct ibv_cq		*cq;
 	struct ibv_qp		*qp;
+	struct ibv_qp_ex	*eqp;
 	struct mr_data_t	*mr;
 	struct ibv_recv_wr	*recv_wr_arr;
 	struct ibv_sge		*sge_arr;
