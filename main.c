@@ -17,6 +17,7 @@ struct config_t config = {
 	.msg_sz = 8,
 	.ring_depth = DEF_RING_DEPTH,
 	.batch_size = DEF_BATCH_SIZE,
+	.new_api = 0,
 };
 
 struct VL_usage_descriptor_t usage_descriptor[] = {
@@ -60,6 +61,13 @@ struct VL_usage_descriptor_t usage_descriptor[] = {
 		"Run as a server.",
 #define DAEMON_CMD_CASE				12
 		DAEMON_CMD_CASE
+	},
+
+	{
+		' ', "new_api", "",
+		"Use new post send API",
+#define NEW_API_CMD_CASE			13
+		NEW_API_CMD_CASE
 	},
 
 	{
@@ -114,6 +122,7 @@ static void print_config(void)
 	VL_MISC_TRACE((" QP Type                        : %s", (VL_ibv_qp_type_str(config.qp_type))));
 	VL_MISC_TRACE((" Ring-depth                     : %u", config.ring_depth));
 	VL_MISC_TRACE((" Batch size                     : %u", config.batch_size));
+	VL_MISC_TRACE((" Use new post API:              : %s", config.new_api ? "Yes" : "No"));
 	VL_MISC_TRACE((" Wait before exit               : %s", bool_to_str(config.wait)));
 
 	VL_MISC_TRACE((" --------------------------------------------------"));
@@ -161,6 +170,10 @@ static int process_arg(
 
 	case BATCH_CMD_CASE:
 		config.batch_size = strtoul(equ_ptr, NULL, 0);
+		break;
+
+	case NEW_API_CMD_CASE:
+		config.new_api = 1;
 		break;
 
 	case QP_TYPE_CMD_CASE:

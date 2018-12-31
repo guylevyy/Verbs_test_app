@@ -164,6 +164,7 @@ static inline void set_send_wr(struct resources_t *resource,
 
 	for (i = 0; i < size; i++) {
 		wr[i].wr_id = WR_ID;
+		wr[i].send_flags = IBV_SEND_SIGNALED;
 		wr[i].opcode = IBV_WR_SEND;
 		wr[i].next = &wr[i + 1];
 		wr[i].sg_list = &resource->sge_arr[i];
@@ -228,21 +229,44 @@ int prepare_receiver(struct resources_t *resource)
 	return SUCCESS;
 }
 
-static inline int old_post_send(struct resources_t *resource, uint16_t batch_size)
+static inline int old_post_send(struct resources_t *resource, uint16_t batch_size,
+				cycles_t *t1, cycles_t *t2 )
 {
 
 	struct ibv_send_wr *bad_wr = NULL;
 	int rc;
 
+	*t1 = get_cycles();
 	set_send_wr(resource, resource->send_wr_arr, batch_size);
 
 	rc = ibv_post_send(resource->qp, resource->send_wr_arr, &bad_wr);
-	if (rc) {
-		VL_MISC_ERR(("in ibv_post_send (%s)", strerror(rc)));
-		return FAIL;
-	}
+	*t2 = get_cycles();
 
-	return SUCCESS;
+	return rc;
+}
+
+static inline int new_post_send(struct resources_t *resource, uint16_t batch_size,
+				cycles_t *t1, cycles_t *t2 )
+{
+	int rc;
+	int i;
+
+	*t1 = get_cycles();
+	ibv_wr_start(resource->eqp);
+	for (i = 0; i < batch_size; i++) {
+		resource->eqp->wr_id = WR_ID;
+		resource->eqp->wr_flags = IBV_SEND_SIGNALED;
+		//resource->eqp->wr_flags = 0;
+		ibv_wr_send(resource->eqp);
+		ibv_wr_set_sge(resource->eqp,
+			       resource->mr->ibv_mr->lkey,
+			       (uintptr_t) resource->mr->addr,
+			       (uint32_t) config.msg_sz);
+	}
+	rc = ibv_wr_complete(resource->eqp);
+	*t2 = get_cycles();
+
+	return rc;
 }
 
 static int do_sender(struct resources_t *resource)
@@ -258,19 +282,18 @@ static int do_sender(struct resources_t *resource)
 		if ((tot_scnt < config.num_of_iter) && (outstanding < config.ring_depth)) {
 			uint32_t left = config.num_of_iter - tot_scnt;
 			uint16_t batch;
-			cycles_t t1;
-			cycles_t t2;
-			cycles_t delta;
+			cycles_t delta, t1, t2;
 
 			batch = (config.ring_depth - outstanding) >= config.batch_size ?
 				(left >= config.batch_size ? config.batch_size : 1) : 1 ;
 
-			t1 = get_cycles();
-			rc = old_post_send(resource, batch);
-			t2 = get_cycles();
+			if (config.new_api)
+				rc = new_post_send(resource, batch, &t1, &t2);
+			else
+				rc = old_post_send(resource, batch, &t1, &t2);
 
 			if (rc) {
-				VL_MISC_ERR(("Failed to post send"));
+				VL_MISC_ERR(("in post send (error: %s)", strerror(rc)));
 				result = FAIL;
 				goto out;
 			}

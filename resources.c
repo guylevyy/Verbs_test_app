@@ -182,28 +182,48 @@ static int init_cq(struct resources_t *resource)
 
 static int init_qp(struct resources_t *resource)
 {
-	struct ibv_qp_init_attr qp_init_attr;
+	struct ibv_qp_init_attr *attr;
+	struct ibv_qp_init_attr attr_leg;
+	struct ibv_qp_init_attr_ex attr_ex;
 
-	memset(&qp_init_attr, 0, sizeof(qp_init_attr));
-	qp_init_attr.qp_type		= config.qp_type;
-	qp_init_attr.sq_sig_all		= 1;
-	qp_init_attr.recv_cq		= resource->cq;
-	qp_init_attr.send_cq		= resource->cq;
-	qp_init_attr.cap.max_recv_sge	= DEF_NUM_SGE;
-	qp_init_attr.cap.max_recv_wr	= config.ring_depth;
-	qp_init_attr.cap.max_send_sge	= DEF_NUM_SGE;
-	qp_init_attr.cap.max_send_wr	= config.ring_depth;
+	if (config.new_api) {
+		memset(&attr_ex, 0, sizeof(attr_ex));
+		attr = (struct ibv_qp_init_attr *)&attr_ex;
+	} else {
+		memset(&attr_leg, 0, sizeof(attr_leg));
+		attr = &attr_leg;
+	}
+
+	attr->qp_type		= config.qp_type;
+	attr->sq_sig_all	= 1;
+	attr->recv_cq		= resource->cq;
+	attr->send_cq		= resource->cq;
+	attr->cap.max_recv_sge	= DEF_NUM_SGE;
+	attr->cap.max_recv_wr	= config.ring_depth;
+	attr->cap.max_send_sge	= DEF_NUM_SGE;
+	attr->cap.max_send_wr	= config.ring_depth;
 
 	VL_DATA_TRACE1(("Going to create QP type %s, max_send_wr %d, max_send_sge %d ",
 			VL_ibv_qp_type_str(config.qp_type),
-			qp_init_attr.cap.max_send_wr,
-			qp_init_attr.cap.max_send_sge));
+			attr->cap.max_send_wr,
+			attr->cap.max_send_sge));
 
-	resource->qp = ibv_create_qp(resource->pd, &qp_init_attr);
+	if (config.new_api) {
+		attr_ex.comp_mask |= IBV_QP_INIT_ATTR_SEND_OPS_FLAGS | IBV_QP_INIT_ATTR_PD;
+		attr_ex.send_ops_flags = IBV_QP_EX_WITH_SEND;
+		attr_ex.pd = resource->pd;
+		resource->qp = ibv_create_qp_ex(resource->hca_p->context, &attr_ex);
+	} else {
+		resource->qp = ibv_create_qp(resource->pd, &attr_leg);
+	}
+
 	if (!resource->qp) {
 		VL_DATA_ERR(("Fail to create QP"));
 		return FAIL;
 	}
+
+	if (config.new_api)
+		resource->eqp = ibv_qp_to_qp_ex(resource->qp);
 
 	VL_DATA_TRACE1(("QP num 0x%x was created", resource->qp->qp_num));
 
