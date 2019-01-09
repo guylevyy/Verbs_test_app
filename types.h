@@ -9,6 +9,8 @@
 #define DEF_RING_DEPTH 64
 #define WR_ID 0xFE
 
+#define ALWAYS_INLINE __attribute__((always_inline))
+
 #define CHECK_VALUE(verb, act_val, exp_val, cmd)			\
 	if ((act_val) != (exp_val)) {					\
 		VL_MISC_ERR(("Error in %s, "				\
@@ -29,17 +31,18 @@ enum {
 };
 
 struct config_t {
-	char			*hca_type;
-	char			ip[VL_IP_STR_LENGTH+1];
-	int			tcp;
-	int			is_daemon;
-	int			new_api;
-	int			wait;
-	int			qp_type;
-	size_t			msg_sz;
-	uint16_t		batch_size;
-	uint16_t		ring_depth;
-	uint32_t		num_of_iter;
+	char		*hca_type;
+	char		ip[VL_IP_STR_LENGTH+1];
+	int		tcp;
+	int		is_daemon;
+	int		new_api;
+	int		wait;
+	int		qp_type;
+	int		use_inl;
+	size_t		msg_sz;
+	uint16_t	batch_size;
+	uint16_t	ring_depth;
+	uint32_t	num_of_iter;
 };
 
 struct hca_data_t {

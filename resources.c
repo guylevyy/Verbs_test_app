@@ -202,11 +202,13 @@ static int init_qp(struct resources_t *resource)
 	attr->cap.max_recv_wr	= config.ring_depth;
 	attr->cap.max_send_sge	= DEF_NUM_SGE;
 	attr->cap.max_send_wr	= config.ring_depth;
+	attr->cap.max_inline_data = config.use_inl ? config.msg_sz : 0;
 
-	VL_DATA_TRACE1(("Going to create QP type %s, max_send_wr %d, max_send_sge %d ",
+	VL_DATA_TRACE1(("Going to create QP type %s, max_send_wr %d, max_send_sge %d max_inline_data %d",
 			VL_ibv_qp_type_str(config.qp_type),
 			attr->cap.max_send_wr,
-			attr->cap.max_send_sge));
+			attr->cap.max_send_sge,
+			attr->cap.max_inline_data));
 
 	if (config.new_api) {
 		attr_ex.comp_mask |= IBV_QP_INIT_ATTR_SEND_OPS_FLAGS | IBV_QP_INIT_ATTR_PD;
