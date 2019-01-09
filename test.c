@@ -9,6 +9,8 @@ int force_configurations_dependencies()
 	if(config.ring_depth < config.batch_size)
 		config.ring_depth = config.batch_size;
 
+	//TODO: Add restriction for use_inl to be used just in SEND and WRITE
+
 	return 0;
 }
 
@@ -164,7 +166,9 @@ static inline void set_send_wr(struct resources_t *resource,
 
 	for (i = 0; i < size; i++) {
 		wr[i].wr_id = WR_ID;
-		wr[i].send_flags = IBV_SEND_SIGNALED;
+		wr[i].send_flags =
+			IBV_SEND_SIGNALED |
+			(config.use_inl ? IBV_SEND_INLINE : 0); //TODO: move it to pre-processing
 		wr[i].opcode = IBV_WR_SEND;
 		wr[i].next = &wr[i + 1];
 		wr[i].sg_list = &resource->sge_arr[i];
@@ -245,8 +249,11 @@ static inline int old_post_send(struct resources_t *resource, uint16_t batch_siz
 	return rc;
 }
 
-static inline int new_post_send(struct resources_t *resource, uint16_t batch_size,
-				cycles_t *t1, cycles_t *t2 )
+static inline int _new_post_send(struct resources_t *resource, uint16_t batch_size,
+				cycles_t *t1, cycles_t *t2, int inl)
+				ALWAYS_INLINE;
+static inline int _new_post_send(struct resources_t *resource, uint16_t batch_size,
+				cycles_t *t1, cycles_t *t2, int inl)
 {
 	int rc;
 	int i;
@@ -258,15 +265,34 @@ static inline int new_post_send(struct resources_t *resource, uint16_t batch_siz
 		resource->eqp->wr_flags = IBV_SEND_SIGNALED;
 		//resource->eqp->wr_flags = 0;
 		ibv_wr_send(resource->eqp);
-		ibv_wr_set_sge(resource->eqp,
-			       resource->mr->ibv_mr->lkey,
-			       (uintptr_t) resource->mr->addr,
-			       (uint32_t) config.msg_sz);
+		if(!inl) {
+			ibv_wr_set_sge(resource->eqp,
+				       resource->mr->ibv_mr->lkey,
+				       (uintptr_t) resource->mr->addr,
+				       (uint32_t) config.msg_sz);
+		} else {
+			ibv_wr_set_inline_sge(resource->eqp,
+					      0,
+					      (uintptr_t) resource->mr->addr,
+					      (uint32_t) config.msg_sz);
+		}
 	}
 	rc = ibv_wr_complete(resource->eqp);
 	*t2 = get_cycles();
 
 	return rc;
+}
+
+static inline int new_post_send(struct resources_t *resource, uint16_t batch_size,
+				cycles_t *t1, cycles_t *t2)
+{
+	return _new_post_send(resource, batch_size, t1, t2, 0);
+}
+
+static inline int new_post_send_inl(struct resources_t *resource, uint16_t batch_size,
+				cycles_t *t1, cycles_t *t2)
+{
+	return _new_post_send(resource, batch_size, t1, t2, 1);
 }
 
 static int do_sender(struct resources_t *resource)
@@ -288,7 +314,10 @@ static int do_sender(struct resources_t *resource)
 				(left >= config.batch_size ? config.batch_size : 1) : 1 ;
 
 			if (config.new_api)
-				rc = new_post_send(resource, batch, &t1, &t2);
+				if (config.use_inl)
+					rc = new_post_send_inl(resource, batch, &t1, &t2);
+				else
+					rc = new_post_send(resource, batch, &t1, &t2);
 			else
 				rc = old_post_send(resource, batch, &t1, &t2);
 

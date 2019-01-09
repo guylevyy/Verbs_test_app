@@ -18,6 +18,7 @@ struct config_t config = {
 	.ring_depth = DEF_RING_DEPTH,
 	.batch_size = DEF_BATCH_SIZE,
 	.new_api = 0,
+	.use_inl = 0,
 };
 
 struct VL_usage_descriptor_t usage_descriptor[] = {
@@ -26,6 +27,13 @@ struct VL_usage_descriptor_t usage_descriptor[] = {
 		"Print this message and exit",
 #define HELP_CMD_CASE				0
 		HELP_CMD_CASE
+	},
+
+	{
+		'I', "use_inl", "",
+		"Use inline data to post",
+#define INL_CMD_CASE				1
+		INL_CMD_CASE
 	},
 
 	{
@@ -122,6 +130,8 @@ static void print_config(void)
 	VL_MISC_TRACE((" QP Type                        : %s", (VL_ibv_qp_type_str(config.qp_type))));
 	VL_MISC_TRACE((" Ring-depth                     : %u", config.ring_depth));
 	VL_MISC_TRACE((" Batch size                     : %u", config.batch_size));
+	VL_MISC_TRACE((" Batch size                     : %u", config.batch_size));
+	VL_MISC_TRACE((" Use inline:                    : %s", config.use_inl ? "Yes" : "No"));
 	VL_MISC_TRACE((" Use new post API:              : %s", config.new_api ? "Yes" : "No"));
 	VL_MISC_TRACE((" Wait before exit               : %s", bool_to_str(config.wait)));
 
@@ -143,6 +153,10 @@ static int process_arg(
 	case HELP_CMD_CASE:
 		VL_usage(1, arr_size, usage_desc_arr);
 		exit(1);
+
+	case INL_CMD_CASE:
+		config.use_inl = 1;
+		break;
 
 	case NUM_OF_ITER_CMD_CASE:
 		config.num_of_iter = strtoul(equ_ptr, NULL, 0);
