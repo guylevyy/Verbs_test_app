@@ -37,6 +37,13 @@ struct VL_usage_descriptor_t usage_descriptor[] = {
 	},
 
 	{
+		'r', "ring_sz", "RING_SZ",
+		"the ring to be used on the TX and RX queues (Default 64)",
+#define RING_CMD_CASE				2
+		RING_CMD_CASE
+	},
+
+	{
 		'i', "iteration", "ITERATION",
 		"The number of iteration for this test (Default 8)",
 #define NUM_OF_ITER_CMD_CASE			6
@@ -156,6 +163,15 @@ static int process_arg(
 
 	case INL_CMD_CASE:
 		config.use_inl = 1;
+		break;
+
+	case RING_CMD_CASE:
+		config.ring_depth = strtoul(equ_ptr, NULL, 0);
+		if (!config.ring_depth) {
+			VL_MISC_ERR(("Ring size cant be zero\n"));
+			exit(1);
+		}
+
 		break;
 
 	case NUM_OF_ITER_CMD_CASE:
