@@ -27,6 +27,8 @@ int resource_alloc(struct resources_t *resource)
 	}
 	VL_MISC_TRACE1(("MR.addr = %p", resource->mr->addr));
 
+	memset(resource->mr->addr, 0xE, config.msg_sz);
+
 	size = config.batch_size * sizeof(struct ibv_wc);
 	resource->wc_arr = VL_MALLOC(size, struct ibv_wc);
 	if (!resource->wc_arr) {
