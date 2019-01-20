@@ -349,12 +349,13 @@ static int do_sender(struct resources_t *resource)
 		if (rc > 0) {
 			int i;
 
-			for (i = 0; i < rc; i++)
+			for (i = 0; i < rc; i++) {
 				if (resource->wc_arr[i].status != IBV_WC_SUCCESS) {
 					VL_MISC_ERR(("got WC with error (%d)", resource->wc_arr[i].status));
 					result = FAIL;
 					goto out;
 				}
+			}
 
 			tot_ccnt += rc;
 		} else if (rc < 0) {

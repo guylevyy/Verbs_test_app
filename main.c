@@ -38,7 +38,7 @@ struct VL_usage_descriptor_t usage_descriptor[] = {
 
 	{
 		'i', "iteration", "ITERATION",
-		"The number of iteration for this test - Default 8",
+		"The number of iteration for this test (Default 8)",
 #define NUM_OF_ITER_CMD_CASE			6
 		NUM_OF_ITER_CMD_CASE
 	},
@@ -129,10 +129,10 @@ static void print_config(void)
 	VL_MISC_TRACE((" Number of iterations           : %d", config.num_of_iter));
 	VL_MISC_TRACE((" QP Type                        : %s", (VL_ibv_qp_type_str(config.qp_type))));
 	VL_MISC_TRACE((" Ring-depth                     : %u", config.ring_depth));
+	VL_MISC_TRACE((" msg size                       : %u", config.msg_sz));
 	VL_MISC_TRACE((" Batch size                     : %u", config.batch_size));
-	VL_MISC_TRACE((" Batch size                     : %u", config.batch_size));
-	VL_MISC_TRACE((" Use inline:                    : %s", config.use_inl ? "Yes" : "No"));
-	VL_MISC_TRACE((" Use new post API:              : %s", config.new_api ? "Yes" : "No"));
+	VL_MISC_TRACE((" Use inline:                    : %s", bool_to_str(config.use_inl)));
+	VL_MISC_TRACE((" Use new post API:              : %s", bool_to_str(config.new_api)));
 	VL_MISC_TRACE((" Wait before exit               : %s", bool_to_str(config.wait)));
 
 	VL_MISC_TRACE((" --------------------------------------------------"));

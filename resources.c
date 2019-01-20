@@ -224,6 +224,13 @@ static int init_qp(struct resources_t *resource)
 		return FAIL;
 	}
 
+	VL_DATA_TRACE1(("Created QP type %s, max_send_wr %d, max_send_sge %d max_inline_data %d",
+			VL_ibv_qp_type_str(config.qp_type),
+			attr->cap.max_send_wr,
+			attr->cap.max_send_sge,
+			attr->cap.max_inline_data));
+
+
 	if (config.new_api)
 		resource->eqp = ibv_qp_to_qp_ex(resource->qp);
 
