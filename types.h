@@ -42,6 +42,7 @@ struct config_t {
 	size_t		msg_sz;
 	uint16_t	batch_size;
 	uint16_t	ring_depth;
+	uint16_t	num_sge;
 	uint32_t	num_of_iter;
 };
 

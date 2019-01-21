@@ -19,6 +19,7 @@ struct config_t config = {
 	.batch_size = DEF_BATCH_SIZE,
 	.new_api = 0,
 	.use_inl = 0,
+	.num_sge = DEF_NUM_SGE,
 };
 
 struct VL_usage_descriptor_t usage_descriptor[] = {
@@ -41,6 +42,13 @@ struct VL_usage_descriptor_t usage_descriptor[] = {
 		"the ring to be used on the TX and RX queues (Default 64)",
 #define RING_CMD_CASE				2
 		RING_CMD_CASE
+	},
+
+	{
+		' ', "num_sge", "NUM_SGE",
+		"Number of SGEs to be used (Default 1)",
+#define SGE_CMD_CASE				3
+		SGE_CMD_CASE
 	},
 
 	{
@@ -138,6 +146,7 @@ static void print_config(void)
 	VL_MISC_TRACE((" Ring-depth                     : %u", config.ring_depth));
 	VL_MISC_TRACE((" msg size                       : %u", config.msg_sz));
 	VL_MISC_TRACE((" Batch size                     : %u", config.batch_size));
+	VL_MISC_TRACE((" Number of SGEs                 : %u", config.num_sge));
 	VL_MISC_TRACE((" Use inline:                    : %s", bool_to_str(config.use_inl)));
 	VL_MISC_TRACE((" Use new post API:              : %s", bool_to_str(config.new_api)));
 	VL_MISC_TRACE((" Wait before exit               : %s", bool_to_str(config.wait)));
@@ -169,6 +178,15 @@ static int process_arg(
 		config.ring_depth = strtoul(equ_ptr, NULL, 0);
 		if (!config.ring_depth) {
 			VL_MISC_ERR(("Ring size cant be zero\n"));
+			exit(1);
+		}
+
+		break;
+
+	case SGE_CMD_CASE:
+		config.num_sge = strtoul(equ_ptr, NULL, 0);
+		if (!config.num_sge) {
+			VL_MISC_ERR(("Number of SGEs cant be zero\n"));
 			exit(1);
 		}
 

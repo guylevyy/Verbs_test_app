@@ -37,7 +37,7 @@ int resource_alloc(struct resources_t *resource)
 	}
 	memset(resource->wc_arr, 0, size);
 
-	size = config.batch_size * sizeof(struct ibv_sge) * DEF_NUM_SGE;
+	size = config.batch_size * sizeof(struct ibv_sge) * config.num_sge;
 	resource->sge_arr = VL_MALLOC(size, struct ibv_sge);
 	if (!resource->sge_arr) {
 		VL_MEM_ERR((" Failed to malloc sge_arr"));
@@ -200,9 +200,9 @@ static int init_qp(struct resources_t *resource)
 	attr->sq_sig_all	= 1;
 	attr->recv_cq		= resource->cq;
 	attr->send_cq		= resource->cq;
-	attr->cap.max_recv_sge	= DEF_NUM_SGE;
+	attr->cap.max_recv_sge	= config.num_sge;
 	attr->cap.max_recv_wr	= config.ring_depth;
-	attr->cap.max_send_sge	= DEF_NUM_SGE;
+	attr->cap.max_send_sge	= config.num_sge;
 	attr->cap.max_send_wr	= config.ring_depth;
 	attr->cap.max_inline_data = config.use_inl ? config.msg_sz : 0;
 

@@ -165,6 +165,8 @@ static inline void set_send_wr(struct resources_t *resource,
 	int i;
 
 	for (i = 0; i < size; i++) {
+		int j;
+
 		wr[i].wr_id = WR_ID;
 		wr[i].send_flags =
 			IBV_SEND_SIGNALED |
@@ -172,11 +174,15 @@ static inline void set_send_wr(struct resources_t *resource,
 		wr[i].opcode = IBV_WR_SEND;
 		wr[i].next = &wr[i + 1];
 		wr[i].sg_list = &resource->sge_arr[i];
-		wr[i].num_sge = DEF_NUM_SGE;
+		wr[i].num_sge = config.num_sge;
 
-		resource->sge_arr[i].addr = (uintptr_t) resource->mr->addr;
-		resource->sge_arr[i].length = config.msg_sz;
-		resource->sge_arr[i].lkey = resource->mr->ibv_mr->lkey;
+		for (j = 0; j < config.num_sge; j++) {
+			int offset = i * config.num_sge + j;
+
+			resource->sge_arr[offset].addr = (uintptr_t) resource->mr->addr;
+			resource->sge_arr[offset].length = config.msg_sz;
+			resource->sge_arr[offset].lkey = resource->mr->ibv_mr->lkey;
+		}
 	}
 
 	wr[size - 1].next = NULL;
@@ -188,14 +194,20 @@ static inline void set_recv_wr(struct resources_t *resource,
 	int i;
 
 	for (i = 0; i < size; i++) {
+		int j;
+
 		wr[i].wr_id = WR_ID;
 		wr[i].next = &wr[i + 1];
 		wr[i].sg_list = &resource->sge_arr[i];
-		wr[i].num_sge = DEF_NUM_SGE;
+		wr[i].num_sge = config.num_sge;
 
-		resource->sge_arr[i].addr = (uintptr_t) resource->mr->addr;
-		resource->sge_arr[i].length = config.msg_sz;
-		resource->sge_arr[i].lkey = resource->mr->ibv_mr->lkey;
+		for (j = 0; j < config.num_sge; j++) {
+			int offset = i * config.num_sge + j;
+
+			resource->sge_arr[offset].addr = (uintptr_t) resource->mr->addr;
+			resource->sge_arr[offset].length = config.msg_sz;
+			resource->sge_arr[offset].lkey = resource->mr->ibv_mr->lkey;
+		}
 	}
 
 	wr[size - 1].next = NULL;
@@ -250,10 +262,10 @@ static inline int old_post_send(struct resources_t *resource, uint16_t batch_siz
 }
 
 static inline int _new_post_send(struct resources_t *resource, uint16_t batch_size,
-				cycles_t *t1, cycles_t *t2, int inl)
+				cycles_t *t1, cycles_t *t2, int inl, int list)
 				ALWAYS_INLINE;
 static inline int _new_post_send(struct resources_t *resource, uint16_t batch_size,
-				cycles_t *t1, cycles_t *t2, int inl)
+				cycles_t *t1, cycles_t *t2, int inl, int list)
 {
 	int rc;
 	int i;
@@ -265,12 +277,26 @@ static inline int _new_post_send(struct resources_t *resource, uint16_t batch_si
 		resource->eqp->wr_flags = IBV_SEND_SIGNALED;
 		//resource->eqp->wr_flags = 0;
 		ibv_wr_send(resource->eqp);
-		if(!inl) {
+		if (!inl && !list) {
 			ibv_wr_set_sge(resource->eqp,
 				       resource->mr->ibv_mr->lkey,
 				       (uintptr_t) resource->mr->addr,
 				       (uint32_t) config.msg_sz);
-		} else {
+		} else if (!inl && list) {
+			int j;
+
+			for (j = 0; j < config.num_sge; j++) {
+				int offset = i * config.num_sge + j;
+
+				resource->sge_arr[offset].addr = (uintptr_t) resource->mr->addr;
+				resource->sge_arr[offset].length = config.msg_sz;
+				resource->sge_arr[offset].lkey = resource->mr->ibv_mr->lkey;
+			}
+
+			ibv_wr_set_sge_list(resource->eqp,
+					    config.num_sge,
+					    &resource->sge_arr[i]);
+		} else if (inl && !list) {
 			ibv_wr_set_inline_sge(resource->eqp,
 					      0,
 					      (uintptr_t) resource->mr->addr,
@@ -286,13 +312,37 @@ static inline int _new_post_send(struct resources_t *resource, uint16_t batch_si
 static inline int new_post_send(struct resources_t *resource, uint16_t batch_size,
 				cycles_t *t1, cycles_t *t2)
 {
-	return _new_post_send(resource, batch_size, t1, t2, 0);
+	return _new_post_send(resource, batch_size, t1, t2, 0, 0);
+}
+
+static inline int new_post_send_sge_list(struct resources_t *resource, uint16_t batch_size,
+				     cycles_t *t1, cycles_t *t2)
+{
+	return _new_post_send(resource, batch_size, t1, t2, 0, 1);
 }
 
 static inline int new_post_send_inl(struct resources_t *resource, uint16_t batch_size,
 				cycles_t *t1, cycles_t *t2)
 {
-	return _new_post_send(resource, batch_size, t1, t2, 1);
+	return _new_post_send(resource, batch_size, t1, t2, 1, 0);
+}
+
+static int post_send_method(struct resources_t *resource, uint16_t batch,
+			    cycles_t *t1, cycles_t *t2)
+{
+	if (config.new_api && config.use_inl && config.num_sge == 1)
+		return new_post_send_inl(resource, batch, t1, t2);
+	else if (config.new_api && !config.use_inl && config.num_sge == 1)
+		return new_post_send(resource, batch, t1, t2);
+	else if (config.new_api && !config.use_inl && config.num_sge > 1)
+		return new_post_send_sge_list(resource, batch, t1, t2);
+	else if (!config.new_api && !config.use_inl)
+		return old_post_send(resource, batch, t1, t2);
+	else {
+		VL_MISC_ERR(("The post send properties are not supported"));
+		return FAIL;
+	}
+
 }
 
 static int do_sender(struct resources_t *resource)
@@ -313,14 +363,7 @@ static int do_sender(struct resources_t *resource)
 			batch = (config.ring_depth - outstanding) >= config.batch_size ?
 				(left >= config.batch_size ? config.batch_size : 1) : 1 ;
 
-			if (config.new_api)
-				if (config.use_inl)
-					rc = new_post_send_inl(resource, batch, &t1, &t2);
-				else
-					rc = new_post_send(resource, batch, &t1, &t2);
-			else
-				rc = old_post_send(resource, batch, &t1, &t2);
-
+			rc = post_send_method(resource, batch, &t1, &t2);
 			if (rc) {
 				VL_MISC_ERR(("in post send (error: %s)", strerror(rc)));
 				result = FAIL;
