@@ -63,6 +63,11 @@ struct sync_qp_info_t {
 	uint32_t	lid;
 } __attribute__ ((packed));
 
+struct sync_conf_info_t {
+	uint32_t	iter;
+	uint32_t	num_sge;
+} __attribute__ ((packed));
+
 struct measure_t {
 	uint32_t batch_samples;
 	cycles_t min;
