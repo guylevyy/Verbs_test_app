@@ -45,6 +45,14 @@ int resource_alloc(struct resources_t *resource)
 	}
 	memset(resource->sge_arr, 0, size);
 
+	size = config.batch_size * sizeof(struct ibv_data_buf) * config.num_sge;
+	resource->data_buf_arr = VL_MALLOC(size, struct ibv_data_buf);
+	if (!resource->data_buf_arr) {
+		VL_MEM_ERR((" Failed to malloc data_buf_arr"));
+		return FAIL;
+	}
+	memset(resource->data_buf_arr, 0, size);
+
 	size = config.batch_size * sizeof(struct ibv_send_wr);
 	resource->send_wr_arr = VL_MALLOC(size, struct ibv_send_wr);
 	if (!resource->send_wr_arr) {
@@ -204,7 +212,7 @@ static int init_qp(struct resources_t *resource)
 	attr->cap.max_recv_wr	= config.ring_depth;
 	attr->cap.max_send_sge	= config.num_sge;
 	attr->cap.max_send_wr	= config.ring_depth;
-	attr->cap.max_inline_data = config.use_inl ? config.msg_sz : 0;
+	attr->cap.max_inline_data = config.use_inl ? config.num_sge : 0;
 
 	VL_DATA_TRACE1(("Going to create QP type %s, max_send_wr %d, max_send_sge %d max_inline_data %d",
 			VL_ibv_qp_type_str(config.qp_type),
@@ -397,6 +405,8 @@ int resource_destroy(struct resources_t *resource)
 		VL_FREE(resource->recv_wr_arr);
 	if (resource->sge_arr)
 		VL_FREE(resource->sge_arr);
+	if (resource->data_buf_arr)
+		VL_FREE(resource->data_buf_arr);
 
 	VL_MISC_TRACE(("*********** Destroy all resource. *************"));
 	return result1;

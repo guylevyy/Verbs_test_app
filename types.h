@@ -80,6 +80,7 @@ struct resources_t {
 	struct mr_data_t	*mr;
 	struct ibv_recv_wr	*recv_wr_arr;
 	struct ibv_sge		*sge_arr;
+	struct ibv_data_buf	*data_buf_arr;
 	struct ibv_send_wr	*send_wr_arr;
 	struct ibv_wc		*wc_arr;
 	struct measure_t	measure;

@@ -162,15 +162,43 @@ static int connect_rc_qp(const struct resources_t *resource,
 	return SUCCESS;
 }
 
-static inline void set_send_wr(struct resources_t *resource,
-			       struct ibv_send_wr *wr, uint16_t size)
+//TODO: This need to be optimized for singlr SGE test (save ~15[ns])
+static inline void set_sge(struct resources_t *resource, struct ibv_sge *arr)
 {
 	size_t chunk = config.msg_sz / config.num_sge;
 	void *addr = resource->mr->addr;
 	int i;
 
+	for (i = 0; i < config.num_sge; i++) {
+		arr[i].addr = (uintptr_t)addr;
+		arr[i].length = chunk;
+		arr[i].lkey = resource->mr->ibv_mr->lkey;
+
+		addr += chunk;
+	}
+}
+
+static inline void set_data_buf(struct resources_t *resource, struct ibv_data_buf *arr)
+{
+	size_t chunk = config.msg_sz / config.num_sge;
+	void *addr = resource->mr->addr;
+	int i;
+
+	for (i = 0; i < config.num_sge; i++) {
+		arr[i].addr = addr;
+		arr[i].length = chunk;
+
+		addr += chunk;
+	}
+}
+
+static inline void set_send_wr(struct resources_t *resource,
+			       struct ibv_send_wr *wr, uint16_t size)
+{
+	int i;
+
 	for (i = 0; i < size; i++) {
-		int j;
+		int offset = i  * config.num_sge;
 
 		wr[i].wr_id = WR_ID;
 		wr[i].send_flags =
@@ -178,18 +206,10 @@ static inline void set_send_wr(struct resources_t *resource,
 			(config.use_inl ? IBV_SEND_INLINE : 0); //TODO: move it to pre-processing
 		wr[i].opcode = IBV_WR_SEND;
 		wr[i].next = &wr[i + 1];
-		wr[i].sg_list = &resource->sge_arr[i];
+		wr[i].sg_list = &resource->sge_arr[offset];
 		wr[i].num_sge = config.num_sge;
 
-		for (j = 0; j < config.num_sge; j++) {
-			int offset = i * config.num_sge + j;
-
-			addr += chunk * i;
-
-			resource->sge_arr[offset].addr = (uintptr_t)addr;
-			resource->sge_arr[offset].length = chunk;
-			resource->sge_arr[offset].lkey = resource->mr->ibv_mr->lkey;
-		}
+		set_sge(resource, &resource->sge_arr[offset]); //TODO: optimize when IBV_SEND_INLINE
 	}
 
 	wr[size - 1].next = NULL;
@@ -198,27 +218,17 @@ static inline void set_send_wr(struct resources_t *resource,
 static inline void set_recv_wr(struct resources_t *resource,
 			       struct ibv_recv_wr *wr, uint16_t size)
 {
-	size_t chunk = config.msg_sz / config.num_sge;
-	void *addr = resource->mr->addr;
 	int i;
 
 	for (i = 0; i < size; i++) {
-		int j;
+		int offset = i * config.num_sge;
 
 		wr[i].wr_id = WR_ID;
 		wr[i].next = &wr[i + 1];
-		wr[i].sg_list = &resource->sge_arr[i];
+		wr[i].sg_list = &resource->sge_arr[offset];
 		wr[i].num_sge = config.num_sge;
 
-		for (j = 0; j < config.num_sge; j++) {
-			int offset = i * config.num_sge + j;
-
-			addr += chunk * i;
-
-			resource->sge_arr[offset].addr = (uintptr_t)addr;
-			resource->sge_arr[offset].length = chunk;
-			resource->sge_arr[offset].lkey = resource->mr->ibv_mr->lkey;
-		}
+		set_sge(resource, &resource->sge_arr[offset]);
 	}
 
 	wr[size - 1].next = NULL;
@@ -278,8 +288,6 @@ static inline int _new_post_send(struct resources_t *resource, uint16_t batch_si
 static inline int _new_post_send(struct resources_t *resource, uint16_t batch_size,
 				cycles_t *t1, cycles_t *t2, int inl, int list)
 {
-	size_t chunk = config.msg_sz / config.num_sge;
-	void *addr = resource->mr->addr;
 	int rc;
 	int i;
 
@@ -295,27 +303,24 @@ static inline int _new_post_send(struct resources_t *resource, uint16_t batch_si
 				       resource->mr->ibv_mr->lkey,
 				       (uintptr_t) resource->mr->addr,
 				       (uint32_t) config.msg_sz);
-		} else if (!inl && list) {
-			int j;
-
-			for (j = 0; j < config.num_sge; j++) {
-				int offset = i * config.num_sge + j;
-
-				addr += chunk * i;
-
-				resource->sge_arr[offset].addr = (uintptr_t)addr;
-				resource->sge_arr[offset].length = chunk;
-				resource->sge_arr[offset].lkey = resource->mr->ibv_mr->lkey;
-			}
-
-			ibv_wr_set_sge_list(resource->eqp,
-					    config.num_sge,
-					    &resource->sge_arr[i]);
 		} else if (inl && !list) {
-			ibv_wr_set_inline_sge(resource->eqp,
-					      0,
-					      (uintptr_t) resource->mr->addr,
-					      (uint32_t) config.msg_sz);
+			ibv_wr_set_inline_data(resource->eqp,
+					       resource->mr->addr,
+					       config.msg_sz);
+		} else if (!inl && list){
+			int offset = i * config.num_sge;
+
+			set_sge(resource, &resource->sge_arr[offset]);
+			ibv_wr_set_sge_list(resource->eqp,
+					config.num_sge,
+					&resource->sge_arr[offset]);
+		} else if (inl && list) {
+			int offset = i * config.num_sge;
+
+			set_data_buf(resource, &resource->data_buf_arr[offset]);
+			ibv_wr_set_inline_data_list(resource->eqp,
+					config.num_sge,
+					&resource->data_buf_arr[offset]);
 		}
 	}
 	rc = ibv_wr_complete(resource->eqp);
@@ -324,7 +329,7 @@ static inline int _new_post_send(struct resources_t *resource, uint16_t batch_si
 	return rc;
 }
 
-static inline int new_post_send(struct resources_t *resource, uint16_t batch_size,
+static inline int new_post_send_sge(struct resources_t *resource, uint16_t batch_size,
 				cycles_t *t1, cycles_t *t2)
 {
 	return _new_post_send(resource, batch_size, t1, t2, 0, 0);
@@ -342,16 +347,26 @@ static inline int new_post_send_inl(struct resources_t *resource, uint16_t batch
 	return _new_post_send(resource, batch_size, t1, t2, 1, 0);
 }
 
+static inline int new_post_send_inl_list(struct resources_t *resource,
+					     uint16_t batch_size,
+					     cycles_t *t1, cycles_t *t2)
+{
+	return _new_post_send(resource, batch_size, t1, t2, 1, 1);
+}
+
 static int post_send_method(struct resources_t *resource, uint16_t batch,
 			    cycles_t *t1, cycles_t *t2)
 {
-	if (config.new_api && config.use_inl && config.num_sge == 1)
+	if (0);
+	else if (config.new_api && config.use_inl && config.num_sge == 1)
 		return new_post_send_inl(resource, batch, t1, t2);
+	else if (config.new_api && config.use_inl && config.num_sge > 1)
+		return new_post_send_inl_list(resource, batch, t1, t2);
 	else if (config.new_api && !config.use_inl && config.num_sge == 1)
-		return new_post_send(resource, batch, t1, t2);
+		return new_post_send_sge(resource, batch, t1, t2);
 	else if (config.new_api && !config.use_inl && config.num_sge > 1)
 		return new_post_send_sge_list(resource, batch, t1, t2);
-	else if (!config.new_api && !config.use_inl)
+	else if (!config.new_api)
 		return old_post_send(resource, batch, t1, t2);
 	else {
 		VL_MISC_ERR(("The post send properties are not supported"));
