@@ -26,7 +26,7 @@ int send_info(struct resources_t *resource, const void *buf, size_t size)
 	VL_SOCK_TRACE1(("Going to send info."));
 
 	if (size % 4) {
-		VL_MISC_ERR(("sync_info must get buffer size of multiples of 4"));
+		VL_MISC_ERR(("sync_info must get buffer size of multiples of 4B"));
 		return FAIL;
 	}
 
@@ -500,6 +500,43 @@ out:
 	VL_DATA_TRACE(("Receiver exit with tot_rcnt=%u tot_ccnt=%u", tot_rcnt, tot_ccnt));
 
 	return result;
+}
+
+int sync_configurations(struct resources_t *resource)
+{
+	struct sync_conf_info_t remote_info = {0};
+	struct sync_conf_info_t local_info = {0};
+	int rc;
+
+
+	local_info.iter = config.num_of_iter;
+
+	if (!config.is_daemon) {
+		rc = send_info(resource, &local_info, sizeof(local_info));
+		if (rc)
+			return FAIL;
+
+		rc = recv_info(resource, &remote_info, sizeof(remote_info));
+		if (rc)
+			return FAIL;
+	} else {
+		rc = recv_info(resource, &remote_info, sizeof(remote_info));
+		if (rc)
+			return FAIL;
+
+		rc = send_info(resource, &local_info, sizeof(local_info));
+		if (rc)
+			return FAIL;
+	}
+
+	if (config.num_of_iter != remote_info.iter) {
+		VL_SOCK_ERR(("Server-client configurations are not synced"));
+		return FAIL;
+	}
+
+	VL_DATA_TRACE(("Server-client configurations are synced"));
+
+	return  SUCCESS;
 }
 
 int do_test(struct resources_t *resource)

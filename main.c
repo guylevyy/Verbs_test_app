@@ -298,6 +298,9 @@ int main(
 	rc = resource_init(&resource);
 	CHECK_RC(rc, "resource_init");
 
+	rc = sync_configurations(&resource);
+	CHECK_RC(rc, "sync_configurations");
+
 	rc = do_test(&resource);
 	CHECK_RC(rc, "do_test");
 
