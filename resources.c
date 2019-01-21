@@ -45,6 +45,14 @@ int resource_alloc(struct resources_t *resource)
 	}
 	memset(resource->sge_arr, 0, size);
 
+	size = config.batch_size * sizeof(struct ibv_data_buf) * config.num_sge;
+	resource->data_buf_arr = VL_MALLOC(size, struct ibv_data_buf);
+	if (!resource->data_buf_arr) {
+		VL_MEM_ERR((" Failed to malloc data_buf_arr"));
+		return FAIL;
+	}
+	memset(resource->data_buf_arr, 0, size);
+
 	size = config.batch_size * sizeof(struct ibv_send_wr);
 	resource->send_wr_arr = VL_MALLOC(size, struct ibv_send_wr);
 	if (!resource->send_wr_arr) {
@@ -398,6 +406,8 @@ int resource_destroy(struct resources_t *resource)
 		VL_FREE(resource->recv_wr_arr);
 	if (resource->sge_arr)
 		VL_FREE(resource->sge_arr);
+	if (resource->data_buf_arr)
+		VL_FREE(resource->data_buf_arr);
 
 	VL_MISC_TRACE(("*********** Destroy all resource. *************"));
 	return result1;
