@@ -235,7 +235,7 @@ int prepare_receiver(struct resources_t *resource)
 
 		rc = ibv_post_recv(resource->qp, resource->recv_wr_arr, &bad_wr);
 		if (rc) {
-			VL_MISC_ERR(("in ibv_post_receive", strerror(rc)));
+			VL_MISC_ERR(("in ibv_post_receive (error: %s)", strerror(rc)));
 			return FAIL;
 		}
 	}
