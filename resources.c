@@ -5,6 +5,7 @@
 #include <vl.h>
 #include <vl_verbs.h>
 #include "resources.h"
+#include <infiniband/mlx5dv.h>
 
 extern struct config_t config;
 
@@ -181,11 +182,36 @@ static int init_cq(struct resources_t *resource)
 {
 	resource->cq = 	ibv_create_cq(resource->hca_p->context, config.ring_depth, NULL, NULL, 0);
 	if (!resource->cq) {
-		VL_DATA_ERR(("Fail in ibv_create_cq."));
+		VL_DATA_ERR(("Fail in ibv_create_cq"));
 		return FAIL;
 	}
 
 	VL_DATA_TRACE1(("Finish init CQ"));
+
+	return SUCCESS;
+}
+
+static int init_srq(struct resources_t *resource)
+{
+	struct ibv_srq_init_attr attr;
+	uint32_t srqn;
+
+	if (config.qp_type != IBV_QPT_DRIVER || !config.is_daemon)
+		return SUCCESS;
+
+	memset(&attr, 0, sizeof(attr));
+	attr.attr.max_wr = config.ring_depth;
+	attr.attr.max_sge = config.num_sge;
+
+	resource->srq = ibv_create_srq(resource->pd, &attr);
+	if (!resource->srq) {
+		VL_DATA_ERR(("Fail in ibv_create_srq"));
+		return FAIL;
+	}
+
+	ibv_get_srq_num(resource->srq, &srqn);
+
+	VL_DATA_TRACE1(("Finish init SRQ 0x%x", srqn));
 
 	return SUCCESS;
 }
@@ -195,8 +221,10 @@ static int init_qp(struct resources_t *resource)
 	struct ibv_qp_init_attr *attr;
 	struct ibv_qp_init_attr attr_leg;
 	struct ibv_qp_init_attr_ex attr_ex;
+	struct mlx5dv_qp_init_attr attr_dv;
 
-	if (config.new_api) {
+	if (config.new_api || config.qp_type == IBV_QPT_DRIVER) {
+		memset(&attr_dv, 0, sizeof(attr_dv));
 		memset(&attr_ex, 0, sizeof(attr_ex));
 		attr = (struct ibv_qp_init_attr *)&attr_ex;
 	} else {
@@ -204,15 +232,23 @@ static int init_qp(struct resources_t *resource)
 		attr = &attr_leg;
 	}
 
-	attr->qp_type		= config.qp_type;
-	attr->sq_sig_all	= 1;
-	attr->recv_cq		= resource->cq;
-	attr->send_cq		= resource->cq;
-	attr->cap.max_recv_sge	= config.num_sge;
-	attr->cap.max_recv_wr	= config.ring_depth;
-	attr->cap.max_send_sge	= config.num_sge;
-	attr->cap.max_send_wr	= config.ring_depth;
-	attr->cap.max_inline_data = config.use_inl ? config.num_sge : 0;
+	attr->qp_type = config.qp_type;
+	attr->recv_cq = resource->cq;
+	attr->send_cq = resource->cq; /* Relevant also for DCT */
+
+	/* DCT nor DCI has receive properties */
+	if (config.qp_type != IBV_QPT_DRIVER) {
+		attr->cap.max_recv_sge = config.num_sge;
+		attr->cap.max_recv_wr = config.ring_depth;
+	}
+
+	/* We dont want to configure send properties on DCT */
+	if (!(config.qp_type == IBV_QPT_DRIVER && config.is_daemon)) {
+		attr->sq_sig_all = 1;
+		attr->cap.max_inline_data = config.use_inl ? config.msg_sz : 0;
+		attr->cap.max_send_sge = config.num_sge;
+		attr->cap.max_send_wr = config.ring_depth;
+	}
 
 	VL_DATA_TRACE1(("Going to create QP type %s, max_send_wr %d, max_send_sge %d max_inline_data %d",
 			VL_ibv_qp_type_str(config.qp_type),
@@ -220,13 +256,32 @@ static int init_qp(struct resources_t *resource)
 			attr->cap.max_send_sge,
 			attr->cap.max_inline_data));
 
-	if (config.new_api) {
+	if (config.new_api) { // And correspondingly a client
 		attr_ex.comp_mask |= IBV_QP_INIT_ATTR_SEND_OPS_FLAGS | IBV_QP_INIT_ATTR_PD;
 		attr_ex.send_ops_flags = IBV_QP_EX_WITH_SEND;
 		attr_ex.pd = resource->pd;
-		resource->qp = ibv_create_qp_ex(resource->hca_p->context, &attr_ex);
-	} else {
-		resource->qp = ibv_create_qp(resource->pd, &attr_leg);
+
+		if (config.qp_type == IBV_QPT_DRIVER) {
+			attr_dv.comp_mask |= MLX5DV_QP_INIT_ATTR_MASK_DC |
+					     MLX5DV_QP_INIT_ATTR_MASK_QP_CREATE_FLAGS;
+			attr_dv.create_flags |= MLX5DV_QP_CREATE_DISABLE_SCATTER_TO_CQE; /*driver doesnt support scatter2cqe data-path on DCI yet*/
+			attr_dv.dc_init_attr.dc_type = MLX5DV_DCTYPE_DCI;
+			resource->qp = mlx5dv_create_qp(resource->hca_p->context, &attr_ex, &attr_dv);
+		} else {
+			resource->qp = ibv_create_qp_ex(resource->hca_p->context, &attr_ex);
+		}
+	} else { // A server or a client with legacy API
+		if (config.qp_type == IBV_QPT_DRIVER) {
+			attr_ex.comp_mask |= IBV_QP_INIT_ATTR_PD;
+			attr_ex.pd = resource->pd;
+			attr_ex.srq = resource->srq;
+			attr_dv.comp_mask |= MLX5DV_QP_INIT_ATTR_MASK_DC;
+			attr_dv.dc_init_attr.dc_type = MLX5DV_DCTYPE_DCT;
+			attr_dv.dc_init_attr.dct_access_key = DC_KEY;
+			resource->qp = mlx5dv_create_qp(resource->hca_p->context, &attr_ex, &attr_dv);
+		} else {
+			resource->qp = ibv_create_qp(resource->pd, &attr_leg);
+		}
 	}
 
 	if (!resource->qp) {
@@ -241,8 +296,11 @@ static int init_qp(struct resources_t *resource)
 			attr->cap.max_inline_data));
 
 
-	if (config.new_api)
+	if (config.new_api) {
 		resource->eqp = ibv_qp_to_qp_ex(resource->qp);
+		if (config.qp_type == IBV_QPT_DRIVER)
+			resource->dv_qp = mlx5dv_qp_ex_from_ibv_qp_ex(resource->eqp);
+	}
 
 	VL_DATA_TRACE1(("QP num 0x%x was created", resource->qp->qp_num));
 
@@ -277,12 +335,13 @@ int resource_init(struct resources_t *resource)
 	    init_hca(resource) != SUCCESS ||
 	    init_pd(resource) != SUCCESS ||
 	    init_cq(resource) != SUCCESS ||
+	    init_srq(resource) != SUCCESS ||
 	    init_qp(resource) != SUCCESS ||
 	    init_mr(resource) != SUCCESS){
-			VL_MISC_ERR(("Fail to init resource."));
+			VL_MISC_ERR(("Fail to init resource"));
 			return FAIL;
 	}
-	VL_MISC_TRACE(("Finish resource init."));
+	VL_MISC_TRACE(("Finish resource init"));
 	return SUCCESS;
 }
 
@@ -302,7 +361,7 @@ static int destroy_all_mr(struct resources_t *resource)
 		VL_FREE(resource->mr);
 	}
 
-	VL_MEM_TRACE1(("Finish destroy all MR."));
+	VL_MEM_TRACE1(("Finish destroy all MR"));
 	return result1;
 }
 
@@ -313,15 +372,46 @@ static int destroy_qp(struct resources_t *resource)
 	if (!resource->qp)
 		return SUCCESS;
 
-	VL_DATA_TRACE1(("Going to destroy QP."));
+	VL_DATA_TRACE1(("Going to destroy QP"));
 	rc = ibv_destroy_qp(resource->qp);
 	CHECK_VALUE("ibv_destroy_qp", rc, 0, return FAIL);
 
-	VL_DATA_TRACE1(("Finish destroy QP."));
+	VL_DATA_TRACE1(("Finish destroy QP"));
 
 	return SUCCESS;
 }
 
+static int destroy_ah(struct resources_t *resource)
+{
+	int rc;
+
+	if (!resource->ah)
+		return SUCCESS;
+
+	VL_DATA_TRACE1(("Going to destroy AH"));
+	rc = ibv_destroy_ah(resource->ah);
+	CHECK_VALUE("ibv_destroy_ah", rc, 0, return FAIL);
+
+	VL_DATA_TRACE1(("Finish destroy AH"));
+
+	return SUCCESS;
+}
+
+static int destroy_srq(struct resources_t *resource)
+{
+	int rc;
+
+	if (!resource->srq)
+		return SUCCESS;
+
+	VL_DATA_TRACE1(("Going to destroy SRQ"));
+	rc = ibv_destroy_srq(resource->srq);
+	CHECK_VALUE("ibv_destroy_srq", rc, 0, return FAIL);
+
+	VL_DATA_TRACE1(("Finish destroy SRQ"));
+
+	return SUCCESS;
+}
 
 static int destroy_cq(struct resources_t *resource)
 {
@@ -346,7 +436,7 @@ static int destroy_pd(struct resources_t *resource)
 	if (!resource->pd)
 		return SUCCESS;
 
-	VL_HCA_TRACE1(("Going to dealloc_pd."));
+	VL_HCA_TRACE1(("Going to dealloc_pd"));
 	rc = ibv_dealloc_pd(resource->pd);
 	if (rc) {
 		VL_HCA_ERR((" Fail in ibv_dealloc_pd Error %s",	strerror(rc)));
@@ -354,7 +444,7 @@ static int destroy_pd(struct resources_t *resource)
 
 	}
 
-	VL_HCA_TRACE1(("Finish destroy PD."));
+	VL_HCA_TRACE1(("Finish destroy PD"));
 
 	return SUCCESS;
 }
@@ -391,11 +481,13 @@ int resource_destroy(struct resources_t *resource)
 	}
 	//destroy_recv_wr(resource);
 
-	if (	destroy_all_mr(resource) != SUCCESS	||
-		destroy_qp(resource) != SUCCESS	||
-		destroy_cq(resource) != SUCCESS	||
-		destroy_pd(resource) != SUCCESS	||
-		destroy_hca(resource) != SUCCESS)
+	if (destroy_all_mr(resource) != SUCCESS	||
+	    destroy_ah(resource) != SUCCESS ||
+	    destroy_qp(resource) != SUCCESS ||
+	    destroy_srq(resource) != SUCCESS ||
+	    destroy_cq(resource) != SUCCESS ||
+	    destroy_pd(resource) != SUCCESS ||
+	    destroy_hca(resource) != SUCCESS)
 		result1 = FAIL;
 
 	if (resource->wc_arr)
