@@ -8,6 +8,7 @@
 #define DEF_BATCH_SIZE 1
 #define DEF_RING_DEPTH 64
 #define WR_ID 0xFE
+#define DC_KEY 0xffeeddcc
 
 #define ALWAYS_INLINE __attribute__((always_inline))
 
@@ -37,13 +38,14 @@ struct config_t {
 	int		is_daemon;
 	int		new_api;
 	int		wait;
-	int		qp_type;
+	enum ibv_qp_type qp_type;
 	int		use_inl;
 	size_t		msg_sz;
 	uint16_t	batch_size;
 	uint16_t	ring_depth;
 	uint16_t	num_sge;
 	uint32_t	num_of_iter;
+	uint32_t	r_dctn;
 };
 
 struct hca_data_t {
@@ -64,8 +66,15 @@ struct sync_qp_info_t {
 } __attribute__ ((packed));
 
 struct sync_conf_info_t {
-	uint32_t	iter;
-	uint32_t	num_sge;
+	uint32_t iter;
+	uint32_t num_sge;
+	enum ibv_qp_type qp_type;
+	uint32_t reserved;
+} __attribute__ ((packed));
+
+struct sync_post_connection_t {
+	uint32_t dctn;
+	uint32_t reserved;
 } __attribute__ ((packed));
 
 struct measure_t {
@@ -80,8 +89,11 @@ struct resources_t {
 	struct hca_data_t	*hca_p;
 	struct ibv_pd		*pd;
 	struct ibv_cq		*cq;
+	struct ibv_srq		*srq;
+	struct ibv_ah		*ah;
 	struct ibv_qp		*qp;
 	struct ibv_qp_ex	*eqp;
+	struct mlx5dv_qp_ex	*dv_qp;
 	struct mr_data_t	*mr;
 	struct ibv_recv_wr	*recv_wr_arr;
 	struct ibv_sge		*sge_arr;

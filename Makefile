@@ -1,7 +1,7 @@
 CC = gcc
-CFLAGS += -g -O2 -Wall -W
+CFLAGS += -g -O2 -Wall -W 
 #-Werror
-LDFLAGS += -libverbs -lvl -lpthread
+LDFLAGS += -libverbs -lvl -lpthread -lmlx5
 OBJECTS = main.o resources.o test.o get_clock.o
 TARGETS = post_send_test
 

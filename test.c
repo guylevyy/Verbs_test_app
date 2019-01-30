@@ -1,6 +1,7 @@
 #include <vl.h>
 #include "types.h"
 #include "get_clock.h"
+#include <infiniband/mlx5dv.h>
 
 extern struct config_t config;
 
@@ -8,6 +9,12 @@ int force_configurations_dependencies()
 {
 	if(config.ring_depth < config.batch_size)
 		config.ring_depth = config.batch_size;
+
+	if (config.new_api && config.is_daemon)
+		return FAIL;
+
+	if (!config.new_api && config.qp_type == IBV_QPT_DRIVER && !config.is_daemon)
+		return FAIL;
 
 	//TODO: Add restriction for use_inl to be used just in SEND and WRITE
 
@@ -70,91 +77,6 @@ int recv_info(struct resources_t *resource, void *buf, size_t size)
 		((uint32_t*) buf)[i] = ntohl((uint32_t) (((uint32_t*) buf)[i]));
 
 	VL_SOCK_TRACE1((" Info was received"));
-
-	return SUCCESS;
-}
-
-static int connect_rc_qp(const struct resources_t *resource,
-			 const struct sync_qp_info_t *remote_qp)
-{
-	struct ibv_qp *qp = resource->qp;
-
-	VL_DATA_TRACE1(("Going to RC QP to lid 0x%x qp_num 0x%x",
-			remote_qp->lid,
-			remote_qp->qp_num));
-
-	{//INIT
-	struct ibv_qp_attr attr = {
-		.qp_state        = IBV_QPS_INIT,
-		.pkey_index      = 0,
-		.port_num        = IB_PORT,
-		.qp_access_flags = 0
-		};
-
-		if (ibv_modify_qp(qp, &attr,
-				  IBV_QP_STATE              |
-				  IBV_QP_PKEY_INDEX         |
-				  IBV_QP_PORT               |
-				  IBV_QP_ACCESS_FLAGS)) {
-			VL_DATA_ERR(("Fail to modify RC QP to IBV_QP_INIT"));
-			return FAIL;
-		}
-
-	}
-
-	{//RTR
-	struct ibv_qp_attr attr = {
-		.qp_state		= IBV_QPS_RTR,
-		.path_mtu		= IBV_MTU_1024,
-		.dest_qp_num		= remote_qp->qp_num,
-		.rq_psn			= 0,
-		.max_dest_rd_atomic	= 0,
-		.min_rnr_timer		= 0x10,
-		.ah_attr		= {
-			.is_global	= 0,
-			.dlid		= remote_qp->lid,
-			.sl		= 0,
-			.src_path_bits	= 0,
-			.port_num	= IB_PORT,
-			}
-		};
-
-		if (ibv_modify_qp(qp, &attr,
-			  IBV_QP_STATE              |
-			  IBV_QP_AV                 |
-			  IBV_QP_PATH_MTU           |
-			  IBV_QP_DEST_QPN           |
-			  IBV_QP_RQ_PSN             |
-			  IBV_QP_MAX_DEST_RD_ATOMIC |
-			  IBV_QP_MIN_RNR_TIMER)) {
-			VL_DATA_ERR(("Fail to modify RC QP, to IBV_QPS_RTR"));
-			return FAIL;
-			}
-	}
-
-	{//RTS
-		struct ibv_qp_attr attr = {
-		.qp_state		= IBV_QPS_RTS,
-		.timeout		= 0x10,
-		.retry_cnt		= 7,
-		.rnr_retry		= 7,
-		.sq_psn			= 0,
-		.max_rd_atomic		= 0
-		};
-
-		if (ibv_modify_qp(resource->qp, &attr,
-			  IBV_QP_STATE              |
-			  IBV_QP_TIMEOUT            |
-			  IBV_QP_RETRY_CNT          |
-			  IBV_QP_RNR_RETRY          |
-			  IBV_QP_SQ_PSN             |
-			  IBV_QP_MAX_QP_RD_ATOMIC)) {
-			VL_DATA_ERR(("Fail to modify RC QP to IBV_QPS_RTS."));
-			return FAIL;
-			}
-	}
-
-	VL_DATA_TRACE1(("RC QP qp_num 0x%x now at RTS.", resource->qp->qp_num));
 
 	return SUCCESS;
 }
@@ -232,7 +154,7 @@ static inline void fast_set_recv_wr(struct ibv_recv_wr *wr, uint16_t size)
 		wr[i].next = &wr[i + 1];
 }
 
-int prepare_receiver(struct resources_t *resource)
+static int prepare_receiver(struct resources_t *resource)
 {
 	int i;
 
@@ -242,7 +164,10 @@ int prepare_receiver(struct resources_t *resource)
 		struct ibv_recv_wr *bad_wr = NULL;
 		int rc;
 
-		rc = ibv_post_recv(resource->qp, resource->recv_wr_arr, &bad_wr);
+		if (config.qp_type != IBV_QPT_DRIVER)
+			rc = ibv_post_recv(resource->qp, resource->recv_wr_arr, &bad_wr);
+		else
+			rc = ibv_post_srq_recv(resource->srq, resource->recv_wr_arr, &bad_wr);
 		if (rc) {
 			VL_MISC_ERR(("in ibv_post_receive (error: %s)", strerror(rc)));
 			return FAIL;
@@ -271,10 +196,12 @@ static inline int old_post_send(struct resources_t *resource, uint16_t batch_siz
 }
 
 static inline int _new_post_send(struct resources_t *resource, uint16_t batch_size,
-				cycles_t *t1, cycles_t *t2, int inl, int list)
+				cycles_t *t1, cycles_t *t2, int inl, int list,
+				enum ibv_qp_type qpt)
 				ALWAYS_INLINE;
 static inline int _new_post_send(struct resources_t *resource, uint16_t batch_size,
-				cycles_t *t1, cycles_t *t2, int inl, int list)
+				cycles_t *t1, cycles_t *t2, int inl, int list,
+				enum ibv_qp_type qpt)
 {
 	int rc;
 	int i;
@@ -286,6 +213,10 @@ static inline int _new_post_send(struct resources_t *resource, uint16_t batch_si
 		resource->eqp->wr_flags = IBV_SEND_SIGNALED;
 		//resource->eqp->wr_flags = 0;
 		ibv_wr_send(resource->eqp);
+
+		if (qpt == IBV_QPT_DRIVER)
+			mlx5dv_wr_set_dc_addr(resource->dv_qp, resource->ah, config.r_dctn ,DC_KEY);
+
 		if (!inl && !list) {
 			ibv_wr_set_sge(resource->eqp,
 				       resource->mr->ibv_mr->lkey,
@@ -317,48 +248,99 @@ static inline int _new_post_send(struct resources_t *resource, uint16_t batch_si
 	return rc;
 }
 
-static inline int new_post_send_sge(struct resources_t *resource, uint16_t batch_size,
+/* RC oriented functions */
+
+static inline int new_post_send_sge_rc(struct resources_t *resource, uint16_t batch_size,
 				cycles_t *t1, cycles_t *t2)
 {
-	return _new_post_send(resource, batch_size, t1, t2, 0, 0);
+	return _new_post_send(resource, batch_size, t1, t2, 0, 0, IBV_QPT_RC);
 }
 
-static inline int new_post_send_sge_list(struct resources_t *resource, uint16_t batch_size,
+static inline int new_post_send_sge_list_rc(struct resources_t *resource, uint16_t batch_size,
 				     cycles_t *t1, cycles_t *t2)
 {
-	return _new_post_send(resource, batch_size, t1, t2, 0, 1);
+	return _new_post_send(resource, batch_size, t1, t2, 0, 1, IBV_QPT_RC);
 }
 
-static inline int new_post_send_inl(struct resources_t *resource, uint16_t batch_size,
+static inline int new_post_send_inl_rc(struct resources_t *resource, uint16_t batch_size,
 				cycles_t *t1, cycles_t *t2)
 {
-	return _new_post_send(resource, batch_size, t1, t2, 1, 0);
+	return _new_post_send(resource, batch_size, t1, t2, 1, 0, IBV_QPT_RC);
 }
 
-static inline int new_post_send_inl_list(struct resources_t *resource,
+static inline int new_post_send_inl_list_rc(struct resources_t *resource,
 					     uint16_t batch_size,
 					     cycles_t *t1, cycles_t *t2)
 {
-	return _new_post_send(resource, batch_size, t1, t2, 1, 1);
+	return _new_post_send(resource, batch_size, t1, t2, 1, 1, IBV_QPT_RC);
+}
+
+/* DC oriented functions */
+
+static inline int new_post_send_sge_dc(struct resources_t *resource, uint16_t batch_size,
+				cycles_t *t1, cycles_t *t2)
+{
+	return _new_post_send(resource, batch_size, t1, t2, 0, 0, IBV_QPT_DRIVER);
+}
+
+static inline int new_post_send_sge_list_dc(struct resources_t *resource, uint16_t batch_size,
+				     cycles_t *t1, cycles_t *t2)
+{
+	return _new_post_send(resource, batch_size, t1, t2, 0, 1, IBV_QPT_DRIVER);
+}
+
+static inline int new_post_send_inl_dc(struct resources_t *resource, uint16_t batch_size,
+				cycles_t *t1, cycles_t *t2)
+{
+	return _new_post_send(resource, batch_size, t1, t2, 1, 0, IBV_QPT_DRIVER);
+}
+
+static inline int new_post_send_inl_list_dc(struct resources_t *resource,
+					     uint16_t batch_size,
+					     cycles_t *t1, cycles_t *t2)
+{
+	return _new_post_send(resource, batch_size, t1, t2, 1, 1, IBV_QPT_DRIVER);
 }
 
 static int post_send_method(struct resources_t *resource, uint16_t batch,
 			    cycles_t *t1, cycles_t *t2)
 {
-	if (0);
-	else if (config.new_api && config.use_inl && config.num_sge == 1)
-		return new_post_send_inl(resource, batch, t1, t2);
-	else if (config.new_api && config.use_inl && config.num_sge > 1)
-		return new_post_send_inl_list(resource, batch, t1, t2);
-	else if (config.new_api && !config.use_inl && config.num_sge == 1)
-		return new_post_send_sge(resource, batch, t1, t2);
-	else if (config.new_api && !config.use_inl && config.num_sge > 1)
-		return new_post_send_sge_list(resource, batch, t1, t2);
-	else if (!config.new_api)
-		return old_post_send(resource, batch, t1, t2);
-	else {
-		VL_MISC_ERR(("The post send properties are not supported"));
-		return FAIL;
+	switch (config.qp_type) {
+	case IBV_QPT_RC:
+		if (0);
+		else if (config.new_api && config.use_inl && config.num_sge == 1)
+			return new_post_send_inl_rc(resource, batch, t1, t2);
+		else if (config.new_api && config.use_inl && config.num_sge > 1)
+			return new_post_send_inl_list_rc(resource, batch, t1, t2);
+		else if (config.new_api && !config.use_inl && config.num_sge == 1)
+			return new_post_send_sge_rc(resource, batch, t1, t2);
+		else if (config.new_api && !config.use_inl && config.num_sge > 1)
+			return new_post_send_sge_list_rc(resource, batch, t1, t2);
+		else if (!config.new_api)
+			return old_post_send(resource, batch, t1, t2);
+		else {
+			VL_MISC_ERR(("The post send properties are not supported on RC"));
+			return FAIL;
+		}
+	case IBV_QPT_DRIVER:
+		if (0);
+		else if (config.new_api && config.use_inl && config.num_sge == 1)
+			return new_post_send_inl_dc(resource, batch, t1, t2);
+		else if (config.new_api && config.use_inl && config.num_sge > 1)
+			return new_post_send_inl_list_dc(resource, batch, t1, t2);
+		else if (config.new_api && !config.use_inl && config.num_sge == 1)
+			return new_post_send_sge_dc(resource, batch, t1, t2);
+		else if (config.new_api && !config.use_inl && config.num_sge > 1)
+			return new_post_send_sge_list_dc(resource, batch, t1, t2);
+		else if (!config.new_api)
+			return old_post_send(resource, batch, t1, t2);
+		else {
+			VL_MISC_ERR(("The post send properties are not supported on DC"));
+			return FAIL;
+		}
+	default:
+			VL_MISC_ERR(("Transport type is unsupported"));
+			return FAIL;
 	}
 
 }
@@ -473,7 +455,10 @@ static int do_receiver(struct resources_t *resource)
 
 			fast_set_recv_wr(resource->recv_wr_arr, batch);
 
-			rc = ibv_post_recv(resource->qp, resource->recv_wr_arr, &bad_wr);
+			if (config.qp_type != IBV_QPT_DRIVER)
+				rc = ibv_post_recv(resource->qp, resource->recv_wr_arr, &bad_wr);
+			else
+				rc = ibv_post_srq_recv(resource->srq, resource->recv_wr_arr, &bad_wr);
 			if (rc) {
 				VL_MISC_ERR(("in ibv_post_receive", strerror(rc)));
 				result = FAIL;
@@ -496,9 +481,9 @@ int sync_configurations(struct resources_t *resource)
 	struct sync_conf_info_t local_info = {0};
 	int rc;
 
-
 	local_info.iter = config.num_of_iter;
 	local_info.num_sge = config.num_sge;
+	local_info.qp_type = config.qp_type;
 
 	if (!config.is_daemon) {
 		rc = send_info(resource, &local_info, sizeof(local_info));
@@ -519,7 +504,8 @@ int sync_configurations(struct resources_t *resource)
 	}
 
 	if (config.num_of_iter != remote_info.iter ||
-	    config.num_sge != remote_info.num_sge) {
+	    config.num_sge != remote_info.num_sge ||
+	    config.qp_type != remote_info.qp_type) {
 		VL_SOCK_ERR(("Server-client configurations are not synced"));
 		return FAIL;
 	}
@@ -529,12 +515,152 @@ int sync_configurations(struct resources_t *resource)
 	return  SUCCESS;
 }
 
-int do_test(struct resources_t *resource)
+int sync_post_connection(struct resources_t *resource)
+{
+	int rc;
+
+	if (config.qp_type != IBV_QPT_DRIVER)
+		return  SUCCESS;
+
+	if (!config.is_daemon) {
+		struct sync_post_connection_t remote_info = {0};
+
+		rc = recv_info(resource, &remote_info, sizeof(remote_info));
+		if (rc)
+			return FAIL;
+
+		config.r_dctn = remote_info.dctn;
+
+		VL_DATA_TRACE(("Sync remote DCTN=0x%x", remote_info.dctn));
+	} else {
+		struct sync_post_connection_t local_info = {0};
+
+		local_info.dctn = resource->qp->qp_num;
+
+		rc = send_info(resource, &local_info, sizeof(local_info));
+		if (rc)
+			return FAIL;
+	}
+
+	return  SUCCESS;
+}
+
+static int init_ah(struct resources_t *resource, uint16_t dlid)
+{
+	struct ibv_ah_attr ah_attr;
+
+	memset(&ah_attr, 0, sizeof(ah_attr));
+	ah_attr.dlid = dlid;
+	ah_attr.port_num = IB_PORT;
+
+	VL_HCA_TRACE1(("Going to create AH"));
+
+	resource->ah = ibv_create_ah(resource->pd, &ah_attr);
+	if (!resource->ah) {
+		VL_DATA_ERR(("Fail in ibv_create_ah"));
+		return FAIL;
+	}
+
+	VL_DATA_TRACE1(("Finish init AH"));
+
+	return SUCCESS;
+}
+
+static int qp_to_init(const struct resources_t *resource)
+{
+	struct ibv_qp_attr attr = {
+		.qp_state        = IBV_QPS_INIT,
+		.pkey_index      = 0,
+		.port_num        = IB_PORT,
+		.qp_access_flags = 0
+		};
+	int attr_mask = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT;
+
+	if (config.qp_type == IBV_QPT_RC)
+		attr_mask |= IBV_QP_ACCESS_FLAGS;
+	else if (config.qp_type == IBV_QPT_DRIVER && config.is_daemon)
+		attr_mask |= IBV_QP_ACCESS_FLAGS;
+
+	if (ibv_modify_qp(resource->qp, &attr, attr_mask)) {
+		VL_DATA_ERR(("Fail to modify QP to IBV_QPS_INIT"));
+		return FAIL;
+	}
+
+	return SUCCESS;
+}
+
+static int qp_to_rtr(const struct resources_t *resource, const struct sync_qp_info_t *remote_qp)
+{
+	struct ibv_qp_attr attr = {
+		.qp_state		= IBV_QPS_RTR,
+		.path_mtu		= IBV_MTU_1024,
+		.min_rnr_timer		= 0x10,
+		.rq_psn			= 0,
+		.max_dest_rd_atomic	= 0,
+		.ah_attr		= {
+			.is_global	= 0,
+			.sl		= 0,
+			.src_path_bits	= 0,
+			.port_num	= IB_PORT,
+			}
+		};
+	int attr_mask = IBV_QP_STATE | IBV_QP_PATH_MTU;
+
+	if (config.qp_type == IBV_QPT_RC) {
+		attr.dest_qp_num = remote_qp->qp_num;
+		attr.ah_attr.dlid = remote_qp->lid;
+
+		attr_mask |= IBV_QP_AV |
+			     IBV_QP_DEST_QPN |
+			     IBV_QP_RQ_PSN |
+			     IBV_QP_MAX_DEST_RD_ATOMIC |
+			     IBV_QP_MIN_RNR_TIMER;
+	} else if (config.qp_type == IBV_QPT_DRIVER && config.is_daemon) {
+		//attr.ah_attr.is_global = 1; //TODO: not sure if required
+
+		attr_mask |= IBV_QP_AV |
+			     IBV_QP_MIN_RNR_TIMER;
+	}
+
+	if (ibv_modify_qp(resource->qp, &attr, attr_mask)) {
+		VL_DATA_ERR(("Fail to modify QP, to IBV_QPS_RTR"));
+		return FAIL;
+	}
+
+	return SUCCESS;
+}
+
+static int qp_to_rts(const struct resources_t *resource)
+{
+	struct ibv_qp_attr attr = {
+		.qp_state		= IBV_QPS_RTS,
+		.timeout		= 0x10,
+		.retry_cnt		= 7,
+		.rnr_retry		= 7,
+		.sq_psn			= 0,
+		.max_rd_atomic		= 0
+		};
+
+	int attr_mask = IBV_QP_STATE |
+			IBV_QP_TIMEOUT |
+			IBV_QP_RETRY_CNT |
+			IBV_QP_RNR_RETRY |
+			IBV_QP_SQ_PSN |
+			IBV_QP_MAX_QP_RD_ATOMIC;
+
+	if (ibv_modify_qp(resource->qp, &attr, attr_mask)) {
+		VL_DATA_ERR(("Fail to modify QP to IBV_QPS_RTS."));
+		return FAIL;
+		}
+
+	return SUCCESS;
+}
+
+int init_connection(struct resources_t *resource)
 {
 	struct sync_qp_info_t remote_qp_info = {0};
 	struct sync_qp_info_t local_qp_info = {0};
 	int rc;
-
 
 	local_qp_info.qp_num = resource->qp->qp_num;
 	local_qp_info.lid = resource->hca_p->port_attr.lid;
@@ -557,9 +683,37 @@ int do_test(struct resources_t *resource)
 			return FAIL;
 	}
 
-	rc = connect_rc_qp(resource, &remote_qp_info);
-	if (rc)
+	VL_DATA_TRACE1(("Going to connect QP to lid 0x%x qp_num 0x%x",
+			remote_qp_info.lid,
+			remote_qp_info.qp_num));
+
+	if (qp_to_init(resource))
 		return FAIL;
+
+	if (qp_to_rtr(resource, &remote_qp_info))
+		return FAIL;
+
+	if(!(config.qp_type == IBV_QPT_DRIVER && config.is_daemon)) {
+		if (qp_to_rts(resource))
+			return FAIL;
+	}
+
+	VL_DATA_TRACE1(("QP qp_num 0x%x is in ready state", resource->qp->qp_num));
+
+	if (config.qp_type == IBV_QPT_DRIVER && !config.is_daemon) {
+		rc = init_ah(resource, (uint16_t)remote_qp_info.lid);
+		if (rc)
+			return FAIL;
+	}
+
+	VL_DATA_TRACE(("init_connection is done"));
+
+	return  SUCCESS;
+}
+
+int do_test(struct resources_t *resource)
+{
+	int rc;
 
 	if (!config.is_daemon) {
 		VL_DATA_TRACE(("Run sender"));

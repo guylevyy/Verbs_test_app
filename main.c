@@ -227,8 +227,8 @@ static int process_arg(
 	case QP_TYPE_CMD_CASE:
 		if (!strcmp("RC",equ_ptr))
 			config.qp_type = IBV_QPT_RC;
-		else if (!strcmp("UD",equ_ptr))
-                        config.qp_type = IBV_QPT_UD;
+		else if (!strcmp("DC",equ_ptr))
+                        config.qp_type = IBV_QPT_DRIVER;
 		else {
 			VL_MISC_ERR(("Unsupported QP Transport Service Type %s\n", equ_ptr));
 			exit(1);
@@ -300,6 +300,12 @@ int main(
 
 	rc = sync_configurations(&resource);
 	CHECK_RC(rc, "sync_configurations");
+
+	rc = init_connection(&resource);
+	CHECK_RC(rc, "init_connection");
+
+	rc = sync_post_connection(&resource);
+	CHECK_RC(rc, "sync_post_connection");
 
 	rc = do_test(&resource);
 	CHECK_RC(rc, "do_test");
