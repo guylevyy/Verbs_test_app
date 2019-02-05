@@ -258,7 +258,12 @@ static int init_qp(struct resources_t *resource)
 
 	if (config.new_api) { // And correspondingly a client
 		attr_ex.comp_mask |= IBV_QP_INIT_ATTR_SEND_OPS_FLAGS | IBV_QP_INIT_ATTR_PD;
-		attr_ex.send_ops_flags = IBV_QP_EX_WITH_SEND;
+
+		if (config.opcode == IBV_WR_SEND)
+			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_SEND;
+		else if (config.opcode == IBV_WR_RDMA_WRITE)
+			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_RDMA_WRITE;
+
 		attr_ex.pd = resource->pd;
 
 		if (config.qp_type == IBV_QPT_DRIVER) {
@@ -312,7 +317,11 @@ static int init_mr(struct resources_t *resource)
 {
 	resource->mr->ibv_mr =
 		ibv_reg_mr(resource->pd, resource->mr->addr,
-			   config.msg_sz, IBV_ACCESS_LOCAL_WRITE);
+			   config.msg_sz,
+			   IBV_ACCESS_LOCAL_WRITE |
+			   IBV_ACCESS_REMOTE_WRITE |
+			   IBV_ACCESS_REMOTE_READ |
+			   IBV_ACCESS_REMOTE_ATOMIC);
 	if (!resource->mr->ibv_mr) {
 		VL_MEM_ERR(("Fail in ibv_reg_mr"));
 		return FAIL;

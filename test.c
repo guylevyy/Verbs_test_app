@@ -15,11 +15,38 @@ int force_configurations_dependencies()
 		return FAIL;
 	}
 
+	/* Send new API is relevant just for sender */
 	if (config.new_api && config.is_daemon)
 		return FAIL;
 
+	/* Driver doesnt support DC in legacy send API */
 	if (!config.new_api && config.qp_type == IBV_QPT_DRIVER && !config.is_daemon)
 		return FAIL;
+
+	/* spec restriction */
+	if (config.use_inl &&
+	    (config.opcode != IBV_WR_SEND && config.opcode != IBV_WR_RDMA_WRITE))
+		return FAIL;
+
+	/* spec restriction */
+	if ((config.opcode == IBV_WR_RDMA_WRITE) &&
+	    (config.qp_type != IBV_QPT_DRIVER &&
+	     config.qp_type != IBV_QPT_RC &&
+	     config.qp_type != IBV_QPT_XRC_SEND &&
+	     config.qp_type != IBV_QPT_XRC_RECV)) {
+		VL_MISC_ERR(("RDMA operations are unsupported on that transport\n"));
+		return FAIL;
+	}
+
+	/* Need to add support for legacy isend API operations */
+	if (!config.is_daemon && !config.new_api && config.opcode != IBV_WR_SEND) {
+		VL_MISC_ERR(("Test support just send opcode for legacy post\n"));
+		return FAIL;
+	}
+
+	/* For performance benchmark need to optimize operations */
+	if (config.opcode != IBV_WR_SEND)
+		VL_MISC_ERR(("WARN: opcode isn't optimized by test!\n"));
 
 	return 0;
 }
@@ -209,11 +236,11 @@ static inline int old_post_send(struct resources_t *resource, uint16_t batch_siz
 
 static inline int _new_post_send(struct resources_t *resource, uint16_t batch_size,
 				cycles_t *t1, cycles_t *t2, int inl, int list,
-				enum ibv_qp_type qpt)
+				enum ibv_qp_type qpt, enum ibv_wr_opcode op)
 				ALWAYS_INLINE;
 static inline int _new_post_send(struct resources_t *resource, uint16_t batch_size,
 				cycles_t *t1, cycles_t *t2, int inl, int list,
-				enum ibv_qp_type qpt)
+				enum ibv_qp_type qpt, enum ibv_wr_opcode op)
 {
 	int rc;
 	int i;
@@ -223,8 +250,17 @@ static inline int _new_post_send(struct resources_t *resource, uint16_t batch_si
 	for (i = 0; i < batch_size; i++) {
 		resource->eqp->wr_id = WR_ID;
 		resource->eqp->wr_flags = IBV_SEND_SIGNALED;
-		//resource->eqp->wr_flags = 0;
-		ibv_wr_send(resource->eqp);
+
+		switch (op) {
+		case IBV_WR_SEND:
+			ibv_wr_send(resource->eqp);
+			break;
+		case IBV_WR_RDMA_WRITE:
+			ibv_wr_rdma_write(resource->eqp, resource->rkey, resource->raddr);
+			break;
+		default:
+			return FAIL;
+		}
 
 		if (qpt == IBV_QPT_DRIVER)
 			mlx5dv_wr_set_dc_addr(resource->dv_qp, resource->ah, resource->r_dctn ,DC_KEY);
@@ -260,58 +296,58 @@ static inline int _new_post_send(struct resources_t *resource, uint16_t batch_si
 	return rc;
 }
 
-/* RC oriented functions */
+/* Post RC SEND WR optimized functions */
 
-static inline int new_post_send_sge_rc(struct resources_t *resource, uint16_t batch_size,
+static int new_post_send_sge_rc(struct resources_t *resource, uint16_t batch_size,
 				cycles_t *t1, cycles_t *t2)
 {
-	return _new_post_send(resource, batch_size, t1, t2, 0, 0, IBV_QPT_RC);
+	return _new_post_send(resource, batch_size, t1, t2, 0, 0, IBV_QPT_RC, IBV_WR_SEND);
 }
 
-static inline int new_post_send_sge_list_rc(struct resources_t *resource, uint16_t batch_size,
+static int new_post_send_sge_list_rc(struct resources_t *resource, uint16_t batch_size,
 				     cycles_t *t1, cycles_t *t2)
 {
-	return _new_post_send(resource, batch_size, t1, t2, 0, 1, IBV_QPT_RC);
+	return _new_post_send(resource, batch_size, t1, t2, 0, 1, IBV_QPT_RC, IBV_WR_SEND);
 }
 
-static inline int new_post_send_inl_rc(struct resources_t *resource, uint16_t batch_size,
+static int new_post_send_inl_rc(struct resources_t *resource, uint16_t batch_size,
 				cycles_t *t1, cycles_t *t2)
 {
-	return _new_post_send(resource, batch_size, t1, t2, 1, 0, IBV_QPT_RC);
+	return _new_post_send(resource, batch_size, t1, t2, 1, 0, IBV_QPT_RC, IBV_WR_SEND);
 }
 
-static inline int new_post_send_inl_list_rc(struct resources_t *resource,
+static int new_post_send_inl_list_rc(struct resources_t *resource,
 					     uint16_t batch_size,
 					     cycles_t *t1, cycles_t *t2)
 {
-	return _new_post_send(resource, batch_size, t1, t2, 1, 1, IBV_QPT_RC);
+	return _new_post_send(resource, batch_size, t1, t2, 1, 1, IBV_QPT_RC, IBV_WR_SEND);
 }
 
-/* DC oriented functions */
+/* Post DC SEND WR optimized functions */
 
-static inline int new_post_send_sge_dc(struct resources_t *resource, uint16_t batch_size,
+static int new_post_send_sge_dc(struct resources_t *resource, uint16_t batch_size,
 				cycles_t *t1, cycles_t *t2)
 {
-	return _new_post_send(resource, batch_size, t1, t2, 0, 0, IBV_QPT_DRIVER);
+	return _new_post_send(resource, batch_size, t1, t2, 0, 0, IBV_QPT_DRIVER, IBV_WR_SEND);
 }
 
-static inline int new_post_send_sge_list_dc(struct resources_t *resource, uint16_t batch_size,
+static int new_post_send_sge_list_dc(struct resources_t *resource, uint16_t batch_size,
 				     cycles_t *t1, cycles_t *t2)
 {
-	return _new_post_send(resource, batch_size, t1, t2, 0, 1, IBV_QPT_DRIVER);
+	return _new_post_send(resource, batch_size, t1, t2, 0, 1, IBV_QPT_DRIVER, IBV_WR_SEND);
 }
 
-static inline int new_post_send_inl_dc(struct resources_t *resource, uint16_t batch_size,
+static int new_post_send_inl_dc(struct resources_t *resource, uint16_t batch_size,
 				cycles_t *t1, cycles_t *t2)
 {
-	return _new_post_send(resource, batch_size, t1, t2, 1, 0, IBV_QPT_DRIVER);
+	return _new_post_send(resource, batch_size, t1, t2, 1, 0, IBV_QPT_DRIVER, IBV_WR_SEND);
 }
 
-static inline int new_post_send_inl_list_dc(struct resources_t *resource,
+static int new_post_send_inl_list_dc(struct resources_t *resource,
 					     uint16_t batch_size,
 					     cycles_t *t1, cycles_t *t2)
 {
-	return _new_post_send(resource, batch_size, t1, t2, 1, 1, IBV_QPT_DRIVER);
+	return _new_post_send(resource, batch_size, t1, t2, 1, 1, IBV_QPT_DRIVER, IBV_WR_SEND);
 }
 
 static int post_send_method(struct resources_t *resource, uint16_t batch,
@@ -320,6 +356,10 @@ static int post_send_method(struct resources_t *resource, uint16_t batch,
 	switch (config.qp_type) {
 	case IBV_QPT_RC:
 		if (0);
+		else if (config.new_api && config.opcode != IBV_WR_SEND)
+			return _new_post_send(resource, batch, t1, t2, config.use_inl,
+					      config.num_sge == 1 ? 0 : 1,
+					      config.qp_type, config.opcode);
 		else if (config.new_api && config.use_inl && config.num_sge == 1)
 			return new_post_send_inl_rc(resource, batch, t1, t2);
 		else if (config.new_api && config.use_inl && config.num_sge > 1)
@@ -336,6 +376,10 @@ static int post_send_method(struct resources_t *resource, uint16_t batch,
 		}
 	case IBV_QPT_DRIVER:
 		if (0);
+		else if (config.new_api && config.opcode != IBV_WR_SEND)
+			return _new_post_send(resource, batch, t1, t2, config.use_inl,
+					      config.num_sge == 1 ? 0 : 1,
+					      config.qp_type, config.opcode);
 		else if (config.new_api && config.use_inl && config.num_sge == 1)
 			return new_post_send_inl_dc(resource, batch, t1, t2);
 		else if (config.new_api && config.use_inl && config.num_sge > 1)
@@ -495,6 +539,7 @@ int sync_configurations(struct resources_t *resource)
 
 	local_info.iter = config.num_of_iter;
 	local_info.qp_type = config.qp_type;
+	local_info.opcode = config.opcode;
 
 	if (!config.is_daemon) {
 		rc = send_info(resource, &local_info, sizeof(local_info));
@@ -515,6 +560,7 @@ int sync_configurations(struct resources_t *resource)
 	}
 
 	if (config.num_of_iter != remote_info.iter ||
+	    config.opcode != remote_info.opcode ||
 	    config.qp_type != remote_info.qp_type) {
 		VL_SOCK_ERR(("Server-client configurations are not synced"));
 		return FAIL;
@@ -529,9 +575,6 @@ int sync_post_connection(struct resources_t *resource)
 {
 	int rc;
 
-	if (config.qp_type != IBV_QPT_DRIVER)
-		return  SUCCESS;
-
 	if (!config.is_daemon) {
 		struct sync_post_connection_t remote_info = {0};
 
@@ -539,13 +582,23 @@ int sync_post_connection(struct resources_t *resource)
 		if (rc)
 			return FAIL;
 
-		resource->r_dctn = remote_info.dctn;
+		if (config.qp_type == IBV_QPT_DRIVER)
+			resource->r_dctn = remote_info.dctn;
 
-		VL_DATA_TRACE(("Sync remote DCTN=0x%x", remote_info.dctn));
+		if (config.opcode == IBV_WR_RDMA_WRITE) {
+			resource->rkey = remote_info.rkey;
+			resource->raddr = remote_info.raddr;
+		}
 	} else {
 		struct sync_post_connection_t local_info = {0};
 
-		local_info.dctn = resource->qp->qp_num;
+		if (config.qp_type == IBV_QPT_DRIVER)
+			local_info.dctn = resource->qp->qp_num;
+
+		if (config.opcode == IBV_WR_RDMA_WRITE) {
+			local_info.rkey = resource->mr->ibv_mr->rkey;
+			local_info.raddr = (uintptr_t)resource->mr->addr;
+		}
 
 		rc = send_info(resource, &local_info, sizeof(local_info));
 		if (rc)
@@ -583,13 +636,21 @@ static int qp_to_init(const struct resources_t *resource)
 		.pkey_index      = 0,
 		.port_num        = IB_PORT,
 		.qp_access_flags = 0
-		};
+	};
 	int attr_mask = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT;
 
-	if (config.qp_type == IBV_QPT_RC)
+	if (config.qp_type == IBV_QPT_RC) {
 		attr_mask |= IBV_QP_ACCESS_FLAGS;
-	else if (config.qp_type == IBV_QPT_DRIVER && config.is_daemon)
+		attr.qp_access_flags = IBV_ACCESS_LOCAL_WRITE |
+				       IBV_ACCESS_REMOTE_WRITE |
+				       IBV_ACCESS_REMOTE_READ |
+				       IBV_ACCESS_REMOTE_ATOMIC;
+	} else if (config.qp_type == IBV_QPT_DRIVER && config.is_daemon) {
 		attr_mask |= IBV_QP_ACCESS_FLAGS;
+		attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE |
+				       IBV_ACCESS_REMOTE_READ |
+				       IBV_ACCESS_REMOTE_ATOMIC;
+	}
 
 	if (ibv_modify_qp(resource->qp, &attr, attr_mask)) {
 		VL_DATA_ERR(("Fail to modify QP to IBV_QPS_INIT"));
@@ -737,6 +798,11 @@ int do_test(struct resources_t *resource)
 
 		if (do_sender(resource))
 			return FAIL;
+
+		if (VL_sock_sync_ready(&resource->sock)) {
+			VL_SOCK_ERR(("Sync after traffic"));
+			return FAIL;
+		}
 	} else {
 		rc = prepare_receiver(resource);
 		if (rc)
@@ -749,8 +815,15 @@ int do_test(struct resources_t *resource)
 			return FAIL;
 		}
 
-		if (do_receiver(resource))
+		if (config.opcode != IBV_WR_RDMA_WRITE) {
+			if (do_receiver(resource))
+				return FAIL;
+		}
+
+		if (VL_sock_sync_ready(&resource->sock)) {
+			VL_SOCK_ERR(("Sync after traffic"));
 			return FAIL;
+		}
 	}
 
 	return SUCCESS;

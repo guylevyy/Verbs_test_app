@@ -14,6 +14,7 @@ struct config_t config = {
 	.wait = 0,
 	.tcp = 17500,
 	.qp_type = IBV_QPT_RC,
+	.opcode = IBV_WR_SEND,
 	.msg_sz = 8,
 	.ring_depth = DEF_RING_DEPTH,
 	.batch_size = DEF_BATCH_SIZE,
@@ -49,6 +50,13 @@ struct VL_usage_descriptor_t usage_descriptor[] = {
 		"Number of SGEs to be used (Default 1)",
 #define SGE_CMD_CASE				3
 		SGE_CMD_CASE
+	},
+
+	{
+		'o', "opcode", "OPCODE",
+		"Message opcode (default: SEND)",
+#define OP_CMD_CASE				4
+		OP_CMD_CASE
 	},
 
 	{
@@ -143,6 +151,7 @@ static void print_config(void)
 	VL_MISC_TRACE((" HCA                            : %s", config.hca_type));
 	VL_MISC_TRACE((" Number of iterations           : %d", config.num_of_iter));
 	VL_MISC_TRACE((" QP Type                        : %s", (VL_ibv_qp_type_str(config.qp_type))));
+	VL_MISC_TRACE((" Opcode                         : %s", (VL_ibv_wr_opcode_str(config.opcode))));
 	VL_MISC_TRACE((" Ring-depth                     : %u", config.ring_depth));
 	VL_MISC_TRACE((" msg size                       : %u", config.msg_sz));
 	VL_MISC_TRACE((" Batch size                     : %u", config.batch_size));
@@ -231,6 +240,17 @@ static int process_arg(
                         config.qp_type = IBV_QPT_DRIVER;
 		else {
 			VL_MISC_ERR(("Unsupported QP Transport Service Type %s\n", equ_ptr));
+			exit(1);
+		}
+                break;
+
+	case OP_CMD_CASE:
+		if (!strcmp("SEND",equ_ptr))
+			config.opcode = IBV_WR_SEND;
+		else if (!strcmp("WRITE",equ_ptr))
+                        config.opcode = IBV_WR_RDMA_WRITE;
+		else {
+			VL_MISC_ERR(("Unsupported opcode %s\n", equ_ptr));
 			exit(1);
 		}
                 break;

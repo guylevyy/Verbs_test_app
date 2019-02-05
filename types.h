@@ -39,6 +39,7 @@ struct config_t {
 	int		new_api;
 	int		wait;
 	enum ibv_qp_type qp_type;
+	enum ibv_wr_opcode opcode;
 	int		use_inl;
 	size_t		msg_sz;
 	uint16_t	batch_size;
@@ -67,11 +68,14 @@ struct sync_qp_info_t {
 struct sync_conf_info_t {
 	uint32_t iter;
 	enum ibv_qp_type qp_type;
+	enum ibv_wr_opcode opcode;
+	uint32_t reserved;
 } __attribute__ ((packed));
 
 struct sync_post_connection_t {
 	uint32_t dctn;
-	uint32_t reserved;
+	uint32_t rkey;
+	uint64_t raddr;
 } __attribute__ ((packed));
 
 struct measure_t {
@@ -99,6 +103,8 @@ struct resources_t {
 	struct ibv_wc		*wc_arr;
 	struct measure_t	measure;
 	uint32_t		r_dctn;
+	uint32_t		rkey;
+	uint64_t		raddr;
 };
 
 #endif /* GEN2_SRQ__TEST_TYPE_H */
