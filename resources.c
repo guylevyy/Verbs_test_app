@@ -364,9 +364,10 @@ static int destroy_hca(struct resources_t *resource)
 	int rc;
 	int result1 = SUCCESS;
 
-	if (!resource->hca_p->context)
+	if (!resource->hca_p || !resource->hca_p->context)
 		return SUCCESS;
 
+	VL_HCA_TRACE1(("Going to close device"));
 	rc = ibv_close_device(resource->hca_p->context);
 	if (rc) {
 		VL_HCA_ERR((" Fail in ibv_close_device"
