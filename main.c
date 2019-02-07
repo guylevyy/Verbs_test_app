@@ -54,7 +54,7 @@ struct VL_usage_descriptor_t usage_descriptor[] = {
 
 	{
 		'o', "opcode", "OPCODE",
-		"Message opcode (default: SEND)",
+		"Message opcode (SEND (default), SEND_IMM, SEND_INV, WRITE, WRITE_IMM, READ)",
 #define OP_CMD_CASE				4
 		OP_CMD_CASE
 	},
@@ -247,8 +247,14 @@ static int process_arg(
 	case OP_CMD_CASE:
 		if (!strcmp("SEND",equ_ptr))
 			config.opcode = IBV_WR_SEND;
+		else if (!strcmp("SEND_IMM",equ_ptr))
+			config.opcode = IBV_WR_SEND_WITH_IMM;
 		else if (!strcmp("WRITE",equ_ptr))
                         config.opcode = IBV_WR_RDMA_WRITE;
+		else if (!strcmp("WRITE_IMM",equ_ptr))
+			config.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
+		else if (!strcmp("READ",equ_ptr))
+			config.opcode = IBV_WR_RDMA_READ;
 		else {
 			VL_MISC_ERR(("Unsupported opcode %s\n", equ_ptr));
 			exit(1);

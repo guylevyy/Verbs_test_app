@@ -9,6 +9,7 @@
 #define DEF_RING_DEPTH 64
 #define WR_ID 0xFE
 #define DC_KEY 0xffeeddcc
+#define IMM_VAL 0xCD
 
 #define ALWAYS_INLINE __attribute__((always_inline))
 

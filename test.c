@@ -25,11 +25,18 @@ int force_configurations_dependencies()
 
 	/* spec restriction */
 	if (config.use_inl &&
-	    (config.opcode != IBV_WR_SEND && config.opcode != IBV_WR_RDMA_WRITE))
+	    config.opcode != IBV_WR_SEND &&
+	    config.opcode != IBV_WR_SEND_WITH_IMM &&
+	    config.opcode != IBV_WR_RDMA_WRITE &&
+	    config.opcode != IBV_WR_RDMA_WRITE_WITH_IMM) {
+		VL_MISC_ERR(("Inline isn't supported by that operation\n"));
 		return FAIL;
+	}
 
 	/* spec restriction */
-	if ((config.opcode == IBV_WR_RDMA_WRITE) &&
+	if ((config.opcode == IBV_WR_RDMA_WRITE ||
+	     config.opcode == IBV_WR_RDMA_WRITE_WITH_IMM ||
+	     config.opcode == IBV_WR_RDMA_READ) &&
 	    (config.qp_type != IBV_QPT_DRIVER &&
 	     config.qp_type != IBV_QPT_RC &&
 	     config.qp_type != IBV_QPT_XRC_SEND &&
@@ -38,7 +45,7 @@ int force_configurations_dependencies()
 		return FAIL;
 	}
 
-	/* Need to add support for legacy isend API operations */
+	/* Need to add support for legacy send API operations */
 	if (!config.is_daemon && !config.new_api && config.opcode != IBV_WR_SEND) {
 		VL_MISC_ERR(("Test support just send opcode for legacy post\n"));
 		return FAIL;
@@ -255,8 +262,17 @@ static inline int _new_post_send(struct resources_t *resource, uint16_t batch_si
 		case IBV_WR_SEND:
 			ibv_wr_send(resource->eqp);
 			break;
+		case IBV_WR_SEND_WITH_IMM:
+			ibv_wr_send_imm(resource->eqp, IMM_VAL);
+			break;
 		case IBV_WR_RDMA_WRITE:
 			ibv_wr_rdma_write(resource->eqp, resource->rkey, resource->raddr);
+			break;
+		case IBV_WR_RDMA_WRITE_WITH_IMM:
+			ibv_wr_rdma_write_imm(resource->eqp, resource->rkey, resource->raddr, IMM_VAL);
+			break;
+		case IBV_WR_RDMA_READ:
+			ibv_wr_rdma_read(resource->eqp, resource->rkey, resource->raddr);
 			break;
 		default:
 			return FAIL;
@@ -585,7 +601,9 @@ int sync_post_connection(struct resources_t *resource)
 		if (config.qp_type == IBV_QPT_DRIVER)
 			resource->r_dctn = remote_info.dctn;
 
-		if (config.opcode == IBV_WR_RDMA_WRITE) {
+		if (config.opcode == IBV_WR_RDMA_WRITE ||
+		    config.opcode == IBV_WR_RDMA_WRITE_WITH_IMM ||
+		    config.opcode == IBV_WR_RDMA_READ) {
 			resource->rkey = remote_info.rkey;
 			resource->raddr = remote_info.raddr;
 		}
@@ -595,7 +613,9 @@ int sync_post_connection(struct resources_t *resource)
 		if (config.qp_type == IBV_QPT_DRIVER)
 			local_info.dctn = resource->qp->qp_num;
 
-		if (config.opcode == IBV_WR_RDMA_WRITE) {
+		if (config.opcode == IBV_WR_RDMA_WRITE ||
+		    config.opcode == IBV_WR_RDMA_WRITE_WITH_IMM ||
+		    config.opcode == IBV_WR_RDMA_READ) {
 			local_info.rkey = resource->mr->ibv_mr->rkey;
 			local_info.raddr = (uintptr_t)resource->mr->addr;
 		}
@@ -667,7 +687,6 @@ static int qp_to_rtr(const struct resources_t *resource, const struct sync_qp_in
 		.path_mtu		= IBV_MTU_1024,
 		.min_rnr_timer		= 0x10,
 		.rq_psn			= 0,
-		.max_dest_rd_atomic	= 0,
 		.ah_attr		= {
 			.is_global	= 0,
 			.sl		= 0,
@@ -680,6 +699,7 @@ static int qp_to_rtr(const struct resources_t *resource, const struct sync_qp_in
 	if (config.qp_type == IBV_QPT_RC) {
 		attr.dest_qp_num = remote_qp->qp_num;
 		attr.ah_attr.dlid = remote_qp->lid;
+		attr.max_dest_rd_atomic = 8,
 
 		attr_mask |= IBV_QP_AV |
 			     IBV_QP_DEST_QPN |
@@ -709,7 +729,7 @@ static int qp_to_rts(const struct resources_t *resource)
 		.retry_cnt		= 7,
 		.rnr_retry		= 7,
 		.sq_psn			= 0,
-		.max_rd_atomic		= 0
+		.max_rd_atomic		= 8
 		};
 
 	int attr_mask = IBV_QP_STATE |
@@ -815,7 +835,8 @@ int do_test(struct resources_t *resource)
 			return FAIL;
 		}
 
-		if (config.opcode != IBV_WR_RDMA_WRITE) {
+		if (config.opcode != IBV_WR_RDMA_WRITE &&
+		    config.opcode != IBV_WR_RDMA_READ) {
 			if (do_receiver(resource))
 				return FAIL;
 		}

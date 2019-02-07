@@ -259,10 +259,17 @@ static int init_qp(struct resources_t *resource)
 	if (config.new_api) { // And correspondingly a client
 		attr_ex.comp_mask |= IBV_QP_INIT_ATTR_SEND_OPS_FLAGS | IBV_QP_INIT_ATTR_PD;
 
-		if (config.opcode == IBV_WR_SEND)
+		if(0);
+		else if (config.opcode == IBV_WR_SEND)
 			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_SEND;
+		else if (config.opcode == IBV_WR_SEND_WITH_IMM)
+			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_SEND_WITH_IMM;
 		else if (config.opcode == IBV_WR_RDMA_WRITE)
 			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_RDMA_WRITE;
+		else if (config.opcode == IBV_WR_RDMA_WRITE_WITH_IMM)
+			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM;
+		else if (config.opcode == IBV_WR_RDMA_READ)
+			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_RDMA_READ;
 
 		attr_ex.pd = resource->pd;
 
@@ -318,6 +325,7 @@ static int init_mr(struct resources_t *resource)
 	resource->mr->ibv_mr =
 		ibv_reg_mr(resource->pd, resource->mr->addr,
 			   config.msg_sz,
+			   IBV_ACCESS_MW_BIND |
 			   IBV_ACCESS_LOCAL_WRITE |
 			   IBV_ACCESS_REMOTE_WRITE |
 			   IBV_ACCESS_REMOTE_READ |
@@ -346,7 +354,7 @@ int resource_init(struct resources_t *resource)
 	    init_cq(resource) != SUCCESS ||
 	    init_srq(resource) != SUCCESS ||
 	    init_qp(resource) != SUCCESS ||
-	    init_mr(resource) != SUCCESS){
+	    init_mr(resource) != SUCCESS) {
 			VL_MISC_ERR(("Fail to init resource"));
 			return FAIL;
 	}
