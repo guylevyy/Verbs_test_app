@@ -255,6 +255,10 @@ static int process_arg(
 			config.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
 		else if (!strcmp("READ",equ_ptr))
 			config.opcode = IBV_WR_RDMA_READ;
+		else if (!strcmp("ATOMIC_FA",equ_ptr))
+			config.opcode = IBV_WR_ATOMIC_FETCH_AND_ADD;
+		else if (!strcmp("ATOMIC_CS",equ_ptr))
+			config.opcode = IBV_WR_ATOMIC_CMP_AND_SWP;
 		else {
 			VL_MISC_ERR(("Unsupported opcode %s\n", equ_ptr));
 			exit(1);

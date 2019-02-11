@@ -23,6 +23,21 @@ int force_configurations_dependencies()
 	if (!config.new_api && config.qp_type == IBV_QPT_DRIVER && !config.is_daemon)
 		return FAIL;
 
+	if (config.msg_sz != 8 &&
+	    (config.opcode == IBV_WR_ATOMIC_FETCH_AND_ADD ||
+	     config.opcode == IBV_WR_ATOMIC_CMP_AND_SWP)) {
+		VL_MISC_ERR(("Atomic operations require minimum 8B buffer\n"));
+		return FAIL;
+	}
+
+	/* Spec/PRM restriction */
+	if (config.num_sge > 1 &&
+	    (config.opcode == IBV_WR_ATOMIC_FETCH_AND_ADD ||
+	     config.opcode == IBV_WR_ATOMIC_CMP_AND_SWP)) {
+		VL_MISC_ERR(("Atomic operation cant set with multiple SGEs\n"));
+		return FAIL;
+	}
+
 	/* spec restriction */
 	if (config.use_inl &&
 	    config.opcode != IBV_WR_SEND &&
@@ -36,7 +51,9 @@ int force_configurations_dependencies()
 	/* spec restriction */
 	if ((config.opcode == IBV_WR_RDMA_WRITE ||
 	     config.opcode == IBV_WR_RDMA_WRITE_WITH_IMM ||
-	     config.opcode == IBV_WR_RDMA_READ) &&
+	     config.opcode == IBV_WR_RDMA_READ ||
+	     config.opcode == IBV_WR_ATOMIC_FETCH_AND_ADD ||
+	     config.opcode == IBV_WR_ATOMIC_CMP_AND_SWP) &&
 	    (config.qp_type != IBV_QPT_DRIVER &&
 	     config.qp_type != IBV_QPT_RC &&
 	     config.qp_type != IBV_QPT_XRC_SEND &&
@@ -273,6 +290,12 @@ static inline int _new_post_send(struct resources_t *resource, uint16_t batch_si
 			break;
 		case IBV_WR_RDMA_READ:
 			ibv_wr_rdma_read(resource->eqp, resource->rkey, resource->raddr);
+			break;
+		case IBV_WR_ATOMIC_FETCH_AND_ADD:
+			ibv_wr_atomic_fetch_add(resource->eqp, resource->rkey, resource->raddr, 0xFAFAFAFA);
+			break;
+		case IBV_WR_ATOMIC_CMP_AND_SWP:
+			ibv_wr_atomic_cmp_swp(resource->eqp, resource->rkey, resource->raddr, 0xEEEEEEEE, 0xCCCCCCCC);
 			break;
 		default:
 			return FAIL;
@@ -603,7 +626,9 @@ int sync_post_connection(struct resources_t *resource)
 
 		if (config.opcode == IBV_WR_RDMA_WRITE ||
 		    config.opcode == IBV_WR_RDMA_WRITE_WITH_IMM ||
-		    config.opcode == IBV_WR_RDMA_READ) {
+		    config.opcode == IBV_WR_RDMA_READ ||
+		    config.opcode == IBV_WR_ATOMIC_FETCH_AND_ADD ||
+		    config.opcode == IBV_WR_ATOMIC_CMP_AND_SWP) {
 			resource->rkey = remote_info.rkey;
 			resource->raddr = remote_info.raddr;
 		}
@@ -615,7 +640,9 @@ int sync_post_connection(struct resources_t *resource)
 
 		if (config.opcode == IBV_WR_RDMA_WRITE ||
 		    config.opcode == IBV_WR_RDMA_WRITE_WITH_IMM ||
-		    config.opcode == IBV_WR_RDMA_READ) {
+		    config.opcode == IBV_WR_RDMA_READ ||
+		    config.opcode == IBV_WR_ATOMIC_FETCH_AND_ADD ||
+		    config.opcode == IBV_WR_ATOMIC_CMP_AND_SWP) {
 			local_info.rkey = resource->mr->ibv_mr->rkey;
 			local_info.raddr = (uintptr_t)resource->mr->addr;
 		}
@@ -836,7 +863,9 @@ int do_test(struct resources_t *resource)
 		}
 
 		if (config.opcode != IBV_WR_RDMA_WRITE &&
-		    config.opcode != IBV_WR_RDMA_READ) {
+		    config.opcode != IBV_WR_RDMA_READ &&
+		    config.opcode != IBV_WR_ATOMIC_FETCH_AND_ADD &&
+		    config.opcode != IBV_WR_ATOMIC_CMP_AND_SWP) {
 			if (do_receiver(resource))
 				return FAIL;
 		}

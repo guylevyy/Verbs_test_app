@@ -270,6 +270,10 @@ static int init_qp(struct resources_t *resource)
 			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM;
 		else if (config.opcode == IBV_WR_RDMA_READ)
 			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_RDMA_READ;
+		else if (config.opcode == IBV_WR_ATOMIC_FETCH_AND_ADD)
+			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_ATOMIC_FETCH_AND_ADD;
+		else if (config.opcode == IBV_WR_ATOMIC_CMP_AND_SWP)
+			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_ATOMIC_CMP_AND_SWP;
 
 		attr_ex.pd = resource->pd;
 
