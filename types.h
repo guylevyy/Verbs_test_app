@@ -97,6 +97,7 @@ struct resources_t {
 	struct ibv_qp_ex	*eqp;
 	struct mlx5dv_qp_ex	*dv_qp;
 	struct mr_data_t	*mr;
+	struct ibv_mw		*mw;
 	struct ibv_recv_wr	*recv_wr_arr;
 	struct ibv_sge		*sge_arr;
 	struct ibv_data_buf	*data_buf_arr;

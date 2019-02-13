@@ -23,6 +23,14 @@ int force_configurations_dependencies()
 	if (!config.new_api && config.qp_type == IBV_QPT_DRIVER && !config.is_daemon)
 		return FAIL;
 
+	if ((config.opcode == IBV_WR_SEND_WITH_INV ||
+	     config.opcode == IBV_WR_LOCAL_INV ||
+	     config.opcode == IBV_WR_BIND_MW) &&
+	     (config.batch_size > 1 || config.num_of_iter > 1)) {
+		VL_MISC_ERR(("Test supports only batch=1 & iter=1 for MW opertions\n"));
+		return FAIL;
+	}
+
 	if (config.msg_sz != 8 &&
 	    (config.opcode == IBV_WR_ATOMIC_FETCH_AND_ADD ||
 	     config.opcode == IBV_WR_ATOMIC_CMP_AND_SWP)) {
@@ -52,13 +60,16 @@ int force_configurations_dependencies()
 	if ((config.opcode == IBV_WR_RDMA_WRITE ||
 	     config.opcode == IBV_WR_RDMA_WRITE_WITH_IMM ||
 	     config.opcode == IBV_WR_RDMA_READ ||
+	     config.opcode == IBV_WR_LOCAL_INV ||
+	     config.opcode == IBV_WR_BIND_MW ||
+	     config.opcode == IBV_WR_SEND_WITH_INV ||
 	     config.opcode == IBV_WR_ATOMIC_FETCH_AND_ADD ||
 	     config.opcode == IBV_WR_ATOMIC_CMP_AND_SWP) &&
 	    (config.qp_type != IBV_QPT_DRIVER &&
 	     config.qp_type != IBV_QPT_RC &&
 	     config.qp_type != IBV_QPT_XRC_SEND &&
 	     config.qp_type != IBV_QPT_XRC_RECV)) {
-		VL_MISC_ERR(("RDMA operations are unsupported on that transport\n"));
+		VL_MISC_ERR(("The operation is unsupported on that transport\n"));
 		return FAIL;
 	}
 
@@ -266,6 +277,15 @@ static inline int _new_post_send(struct resources_t *resource, uint16_t batch_si
 				cycles_t *t1, cycles_t *t2, int inl, int list,
 				enum ibv_qp_type qpt, enum ibv_wr_opcode op)
 {
+	struct ibv_mw_bind_info bind_info = {
+		.mr = resource->mr->ibv_mr,
+		.addr = (uint64_t)resource->mr->addr,
+		.length = config.msg_sz,
+		.mw_access_flags =
+			IBV_ACCESS_REMOTE_READ |
+			IBV_ACCESS_REMOTE_WRITE
+	};
+	uint32_t new_rkey;
 	int rc;
 	int i;
 
@@ -297,6 +317,35 @@ static inline int _new_post_send(struct resources_t *resource, uint16_t batch_si
 		case IBV_WR_ATOMIC_CMP_AND_SWP:
 			ibv_wr_atomic_cmp_swp(resource->eqp, resource->rkey, resource->raddr, 0xEEEEEEEE, 0xCCCCCCCC);
 			break;
+		case IBV_WR_BIND_MW:
+		case IBV_WR_LOCAL_INV:
+		case IBV_WR_SEND_WITH_INV:
+			new_rkey = ibv_inc_rkey(resource->mw->rkey);
+			ibv_wr_bind_mw(resource->eqp, resource->mw, new_rkey, &bind_info);
+			rc = ibv_wr_complete(resource->eqp);
+			if (rc)
+				return rc;
+
+			resource->mw->rkey = new_rkey;
+
+			if (config.opcode == IBV_WR_BIND_MW) {
+				*t2 = get_cycles();
+				return rc;
+			} /* End of IBV_WR_BIND_MW flow */
+
+			ibv_wr_start(resource->eqp);
+
+			if (config.opcode == IBV_WR_SEND_WITH_INV) {
+				ibv_wr_send_inv(resource->eqp, new_rkey);
+				break;
+			} else {
+				ibv_wr_local_inv(resource->eqp, new_rkey);
+				rc = ibv_wr_complete(resource->eqp);
+				*t2 = get_cycles();
+
+				return rc;
+			}
+
 		default:
 			return FAIL;
 		}
@@ -448,12 +497,13 @@ static int do_sender(struct resources_t *resource)
 
 	while (tot_ccnt < config.num_of_iter) {
 		uint16_t outstanding = tot_scnt - tot_ccnt;
+		static bool got_bind_wc = 0;
 		int rc = 0;
 
 		if ((tot_scnt < config.num_of_iter) && (outstanding < config.ring_depth)) {
 			uint32_t left = config.num_of_iter - tot_scnt;
 			uint16_t batch;
-			cycles_t delta, t1, t2;
+			cycles_t delta, t1, t2 = 0;
 
 			batch = (config.ring_depth - outstanding) >= config.batch_size ?
 				(left >= config.batch_size ? config.batch_size : 1) : 1 ;
@@ -496,6 +546,13 @@ static int do_sender(struct resources_t *resource)
 			}
 
 			tot_ccnt += rc;
+
+			if ((config.opcode == IBV_WR_LOCAL_INV ||
+			     config.opcode == IBV_WR_SEND_WITH_INV) &&
+			    tot_ccnt == 1 && !got_bind_wc) {
+				got_bind_wc = 1;
+				tot_ccnt = 0;
+			}
 		} else if (rc < 0) {
 			VL_MISC_ERR(("in ibv_poll_cq (%s)", strerror(rc)));
 			result = FAIL;
@@ -865,7 +922,9 @@ int do_test(struct resources_t *resource)
 		if (config.opcode != IBV_WR_RDMA_WRITE &&
 		    config.opcode != IBV_WR_RDMA_READ &&
 		    config.opcode != IBV_WR_ATOMIC_FETCH_AND_ADD &&
-		    config.opcode != IBV_WR_ATOMIC_CMP_AND_SWP) {
+		    config.opcode != IBV_WR_ATOMIC_CMP_AND_SWP &&
+		    config.opcode != IBV_WR_LOCAL_INV &&
+		    config.opcode != IBV_WR_BIND_MW) {
 			if (do_receiver(resource))
 				return FAIL;
 		}

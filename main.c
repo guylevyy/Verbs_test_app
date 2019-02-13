@@ -54,7 +54,7 @@ struct VL_usage_descriptor_t usage_descriptor[] = {
 
 	{
 		'o', "opcode", "OPCODE",
-		"Message opcode (SEND (default), SEND_IMM, SEND_INV, WRITE, WRITE_IMM, READ)",
+		"Message opcode (SEND (default), SEND_IMM, SEND_INV, WRITE, WRITE_IMM, READ, BIND, LOCAL_INV)",
 #define OP_CMD_CASE				4
 		OP_CMD_CASE
 	},
@@ -259,6 +259,12 @@ static int process_arg(
 			config.opcode = IBV_WR_ATOMIC_FETCH_AND_ADD;
 		else if (!strcmp("ATOMIC_CS",equ_ptr))
 			config.opcode = IBV_WR_ATOMIC_CMP_AND_SWP;
+		else if (!strcmp("BIND",equ_ptr))
+			config.opcode = IBV_WR_BIND_MW;
+		else if (!strcmp("LOCAL_INV",equ_ptr))
+			config.opcode = IBV_WR_LOCAL_INV;
+		else if (!strcmp("SEND_INV",equ_ptr))
+			config.opcode = IBV_WR_SEND_WITH_INV;
 		else {
 			VL_MISC_ERR(("Unsupported opcode %s\n", equ_ptr));
 			exit(1);

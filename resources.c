@@ -274,6 +274,12 @@ static int init_qp(struct resources_t *resource)
 			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_ATOMIC_FETCH_AND_ADD;
 		else if (config.opcode == IBV_WR_ATOMIC_CMP_AND_SWP)
 			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_ATOMIC_CMP_AND_SWP;
+		else if (config.opcode == IBV_WR_BIND_MW)
+			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_BIND_MW;
+		else if (config.opcode == IBV_WR_LOCAL_INV)
+			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_LOCAL_INV;
+		else if (config.opcode == IBV_WR_SEND_WITH_INV)
+			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_SEND_WITH_INV;
 
 		attr_ex.pd = resource->pd;
 
@@ -349,6 +355,25 @@ static int init_mr(struct resources_t *resource)
 	return SUCCESS;
 }
 
+static int init_mw(struct resources_t *resource)
+{
+	if (config.opcode != IBV_WR_SEND_WITH_INV &&
+	    config.opcode != IBV_WR_BIND_MW &&
+	    config.opcode != IBV_WR_LOCAL_INV)
+		return SUCCESS;
+
+	resource->mw =
+		ibv_alloc_mw(resource->pd, IBV_MW_TYPE_2);
+	if (!resource->mw) {
+		VL_MEM_ERR(("Fail in ibv_alloc_mw"));
+		return FAIL;
+	}
+
+	VL_MEM_TRACE1(("Finish init MW"));
+
+	return SUCCESS;
+}
+
 int resource_init(struct resources_t *resource)
 {
 
@@ -358,11 +383,27 @@ int resource_init(struct resources_t *resource)
 	    init_cq(resource) != SUCCESS ||
 	    init_srq(resource) != SUCCESS ||
 	    init_qp(resource) != SUCCESS ||
-	    init_mr(resource) != SUCCESS) {
+	    init_mr(resource) != SUCCESS ||
+	    init_mw(resource)) {
 			VL_MISC_ERR(("Fail to init resource"));
 			return FAIL;
 	}
 	VL_MISC_TRACE(("Finish resource init"));
+	return SUCCESS;
+}
+
+static int destroy_mw(struct resources_t *resource)
+{
+	int rc;
+
+	if (!resource->mw)
+		return SUCCESS;
+
+	VL_DATA_TRACE1(("Going to destroy MW"));
+	rc = ibv_dealloc_mw(resource->mw);
+	CHECK_VALUE("ibv_dealloc_mw", rc, 0, return FAIL);
+
+	VL_DATA_TRACE1(("Finish destroy MW"));
 	return SUCCESS;
 }
 
@@ -502,7 +543,8 @@ int resource_destroy(struct resources_t *resource)
 	}
 	//destroy_recv_wr(resource);
 
-	if (destroy_all_mr(resource) != SUCCESS	||
+	if (destroy_mw(resource) != SUCCESS ||
+	    destroy_all_mr(resource) != SUCCESS	||
 	    destroy_ah(resource) != SUCCESS ||
 	    destroy_qp(resource) != SUCCESS ||
 	    destroy_srq(resource) != SUCCESS ||
