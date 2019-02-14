@@ -20,12 +20,12 @@ int resource_alloc(struct resources_t *resource)
 	}
 	memset(resource->mr, 0, size);
 
-	resource->mr->addr = VL_MALLOC(config.msg_sz * sizeof(char), void);
+	resource->mr->addr = VL_MALLOC(config.msg_sz, void);
 	if (!resource->mr->addr) {
 		VL_MEM_ERR(("Failed to malloc data-buffer"));
 		return FAIL;
 	}
-	VL_MISC_TRACE1(("MR.addr = %p", resource->mr->addr));
+	VL_MEM_TRACE1(("Data buffer address %p", resource->mr->addr));
 
 	size = config.batch_size * sizeof(struct ibv_wc);
 	resource->wc_arr = VL_MALLOC(size, struct ibv_wc);
@@ -221,11 +221,10 @@ static int init_mr(struct resources_t *resource)
 		return FAIL;
 	}
 
-	VL_MEM_TRACE((" MR created, addr = %p, size = %d, lkey = 0x%x",
-				resource->mr->addr,
-				config.msg_sz,
+	VL_MEM_TRACE1((" MR created, addr = %p, size = %d, lkey = 0x%x",
+				resource->mr->ibv_mr->addr,
+				resource->mr->ibv_mr->length,
 				resource->mr->ibv_mr->lkey));
-
 
 	VL_MEM_TRACE(("Finish init MR"));
 
