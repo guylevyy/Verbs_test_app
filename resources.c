@@ -223,7 +223,7 @@ static int init_qp(struct resources_t *resource)
 	struct ibv_qp_init_attr_ex attr_ex;
 	struct mlx5dv_qp_init_attr attr_dv;
 
-	if (config.new_api || config.qp_type == IBV_QPT_DRIVER) {
+	if (config.send_method || config.qp_type == IBV_QPT_DRIVER) {
 		memset(&attr_dv, 0, sizeof(attr_dv));
 		memset(&attr_ex, 0, sizeof(attr_ex));
 		attr = (struct ibv_qp_init_attr *)&attr_ex;
@@ -256,7 +256,7 @@ static int init_qp(struct resources_t *resource)
 			attr->cap.max_send_sge,
 			attr->cap.max_inline_data));
 
-	if (config.new_api) { // And correspondingly a client
+	if (config.send_method) { // And correspondingly a client
 		attr_ex.comp_mask |= IBV_QP_INIT_ATTR_SEND_OPS_FLAGS | IBV_QP_INIT_ATTR_PD;
 
 		if(0);
@@ -318,7 +318,7 @@ static int init_qp(struct resources_t *resource)
 			attr->cap.max_inline_data));
 
 
-	if (config.new_api) {
+	if (config.send_method) {
 		resource->eqp = ibv_qp_to_qp_ex(resource->qp);
 		if (config.qp_type == IBV_QPT_DRIVER)
 			resource->dv_qp = mlx5dv_qp_ex_from_ibv_qp_ex(resource->eqp);

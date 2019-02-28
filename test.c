@@ -16,12 +16,18 @@ int force_configurations_dependencies()
 	}
 
 	/* Send new API is relevant just for sender */
-	if (config.new_api && config.is_daemon)
+	if ((config.send_method == METHOD_MIX || config.send_method == METHOD_NEW) &&
+	    config.is_daemon) {
+		VL_MISC_ERR(("New or MIX method is allowed just on client\n"));
 		return FAIL;
+	}
 
 	/* Driver doesnt support DC in legacy send API */
-	if (!config.new_api && config.qp_type == IBV_QPT_DRIVER && !config.is_daemon)
+	if ((config.send_method == METHOD_OLD || config.send_method == METHOD_MIX) &&
+	    config.qp_type == IBV_QPT_DRIVER && !config.is_daemon) {
+		VL_MISC_ERR(("OLD and MIX methods don't support DC\n"));
 		return FAIL;
+	}
 
 	if ((config.opcode == IBV_WR_SEND_WITH_INV ||
 	     config.opcode == IBV_WR_LOCAL_INV ||
@@ -74,7 +80,9 @@ int force_configurations_dependencies()
 	}
 
 	/* Need to add support for legacy send API operations */
-	if (!config.is_daemon && !config.new_api && config.opcode != IBV_WR_SEND) {
+	if (!config.is_daemon &&
+	    (config.send_method == METHOD_OLD || config.send_method == METHOD_MIX) &&
+	    config.opcode != IBV_WR_SEND) {
 		VL_MISC_ERR(("Test support just send opcode for legacy post\n"));
 		return FAIL;
 	}
@@ -438,55 +446,90 @@ static int new_post_send_inl_list_dc(struct resources_t *resource,
 	return _new_post_send(resource, batch_size, t1, t2, 1, 1, IBV_QPT_DRIVER, IBV_WR_SEND);
 }
 
-static int post_send_method(struct resources_t *resource, uint16_t batch,
-			    cycles_t *t1, cycles_t *t2)
+
+static int post_send_method_new(struct resources_t *resource, uint16_t batch,
+				cycles_t *t1, cycles_t *t2)
 {
 	switch (config.qp_type) {
 	case IBV_QPT_RC:
 		if (0);
-		else if (config.new_api && config.opcode != IBV_WR_SEND)
+		else if (config.opcode != IBV_WR_SEND)
 			return _new_post_send(resource, batch, t1, t2, config.use_inl,
 					      config.num_sge == 1 ? 0 : 1,
 					      config.qp_type, config.opcode);
-		else if (config.new_api && config.use_inl && config.num_sge == 1)
+		else if (config.use_inl && config.num_sge == 1)
 			return new_post_send_inl_rc(resource, batch, t1, t2);
-		else if (config.new_api && config.use_inl && config.num_sge > 1)
+		else if (config.use_inl && config.num_sge > 1)
 			return new_post_send_inl_list_rc(resource, batch, t1, t2);
-		else if (config.new_api && !config.use_inl && config.num_sge == 1)
+		else if (!config.use_inl && config.num_sge == 1)
 			return new_post_send_sge_rc(resource, batch, t1, t2);
-		else if (config.new_api && !config.use_inl && config.num_sge > 1)
+		else if (!config.use_inl && config.num_sge > 1)
 			return new_post_send_sge_list_rc(resource, batch, t1, t2);
-		else if (!config.new_api)
-			return old_post_send(resource, batch, t1, t2);
 		else {
 			VL_MISC_ERR(("The post send properties are not supported on RC"));
 			return FAIL;
 		}
 	case IBV_QPT_DRIVER:
 		if (0);
-		else if (config.new_api && config.opcode != IBV_WR_SEND)
+		else if (config.opcode != IBV_WR_SEND)
 			return _new_post_send(resource, batch, t1, t2, config.use_inl,
 					      config.num_sge == 1 ? 0 : 1,
 					      config.qp_type, config.opcode);
-		else if (config.new_api && config.use_inl && config.num_sge == 1)
+		else if (config.use_inl && config.num_sge == 1)
 			return new_post_send_inl_dc(resource, batch, t1, t2);
-		else if (config.new_api && config.use_inl && config.num_sge > 1)
+		else if (config.use_inl && config.num_sge > 1)
 			return new_post_send_inl_list_dc(resource, batch, t1, t2);
-		else if (config.new_api && !config.use_inl && config.num_sge == 1)
+		else if (!config.use_inl && config.num_sge == 1)
 			return new_post_send_sge_dc(resource, batch, t1, t2);
-		else if (config.new_api && !config.use_inl && config.num_sge > 1)
+		else if (!config.use_inl && config.num_sge > 1)
 			return new_post_send_sge_list_dc(resource, batch, t1, t2);
-		else if (!config.new_api)
-			return old_post_send(resource, batch, t1, t2);
 		else {
 			VL_MISC_ERR(("The post send properties are not supported on DC"));
 			return FAIL;
 		}
 	default:
-			VL_MISC_ERR(("Transport type is unsupported"));
+			VL_MISC_ERR(("Unsupported transport"));
 			return FAIL;
 	}
 
+}
+
+static int post_send_method_old(struct resources_t *resource, uint16_t batch,
+				cycles_t *t1, cycles_t *t2)
+{
+	return old_post_send(resource, batch, t1, t2);
+}
+
+
+static int post_send_method_mix(struct resources_t *resource, uint16_t batch,
+				cycles_t *t1, cycles_t *t2)
+{
+	int rc;
+
+	if (resource->method_state)
+		rc = post_send_method_old(resource, batch, t1, t2);
+	else
+		rc = post_send_method_new(resource, batch, t1, t2);
+
+	resource->method_state = ~resource->method_state;
+
+	return rc;
+}
+
+static int post_send_method(struct resources_t *resource, enum send_method method,
+			    uint16_t batch, cycles_t *t1, cycles_t *t2)
+{
+	switch (method) {
+	case METHOD_OLD:
+		return post_send_method_old(resource, batch, t1, t2);
+	case METHOD_NEW:
+		return post_send_method_new(resource, batch, t1, t2);
+	case METHOD_MIX:
+		return post_send_method_mix(resource, batch, t1, t2);
+	default:
+		VL_MISC_ERR(("Unsupported method"));
+		return FAIL;
+	}
 }
 
 static int do_sender(struct resources_t *resource)
@@ -508,7 +551,7 @@ static int do_sender(struct resources_t *resource)
 			batch = (config.ring_depth - outstanding) >= config.batch_size ?
 				(left >= config.batch_size ? config.batch_size : 1) : 1 ;
 
-			rc = post_send_method(resource, batch, &t1, &t2);
+			rc = post_send_method(resource, config.send_method, batch, &t1, &t2);
 			if (rc) {
 				VL_MISC_ERR(("in post send (error: %s)", strerror(rc)));
 				result = FAIL;

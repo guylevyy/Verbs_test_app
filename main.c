@@ -18,7 +18,7 @@ struct config_t config = {
 	.msg_sz = 8,
 	.ring_depth = DEF_RING_DEPTH,
 	.batch_size = DEF_BATCH_SIZE,
-	.new_api = 0,
+	.send_method = METHOD_OLD,
 	.use_inl = 0,
 	.num_sge = DEF_NUM_SGE,
 };
@@ -60,6 +60,13 @@ struct VL_usage_descriptor_t usage_descriptor[] = {
 	},
 
 	{
+		'm', "method", "METHOD",
+		"Post send method [OLD, NEW, MIX] (default: OLD)",
+#define SND_MTD_CMD_CASE			5
+		SND_MTD_CMD_CASE
+	},
+
+	{
 		'i', "iteration", "ITERATION",
 		"The number of iteration for this test (Default 8)",
 #define NUM_OF_ITER_CMD_CASE			6
@@ -92,13 +99,6 @@ struct VL_usage_descriptor_t usage_descriptor[] = {
 		"Run as a server.",
 #define DAEMON_CMD_CASE				12
 		DAEMON_CMD_CASE
-	},
-
-	{
-		' ', "new_api", "",
-		"Use new post send API",
-#define NEW_API_CMD_CASE			13
-		NEW_API_CMD_CASE
 	},
 
 	{
@@ -157,7 +157,7 @@ static void print_config(void)
 	VL_MISC_TRACE((" Batch size                     : %u", config.batch_size));
 	VL_MISC_TRACE((" Number of SGEs                 : %u", config.num_sge));
 	VL_MISC_TRACE((" Use inline:                    : %s", bool_to_str(config.use_inl)));
-	VL_MISC_TRACE((" Use new post API:              : %s", bool_to_str(config.new_api)));
+	VL_MISC_TRACE((" Use post send method           : %d", config.send_method));
 	VL_MISC_TRACE((" Wait before exit               : %s", bool_to_str(config.wait)));
 
 	VL_MISC_TRACE((" --------------------------------------------------"));
@@ -229,8 +229,17 @@ static int process_arg(
 		config.batch_size = strtoul(equ_ptr, NULL, 0);
 		break;
 
-	case NEW_API_CMD_CASE:
-		config.new_api = 1;
+	case SND_MTD_CMD_CASE:
+		if (!strcmp("OLD",equ_ptr))
+			config.send_method = METHOD_OLD;
+		else if (!strcmp("NEW",equ_ptr))
+			config.send_method = METHOD_NEW;
+		else if (!strcmp("MIX",equ_ptr))
+			config.send_method = METHOD_MIX;
+		else {
+			VL_MISC_ERR(("Unsupported post send method %s\n", equ_ptr));
+			exit(1);
+		}
 		break;
 
 	case QP_TYPE_CMD_CASE:

@@ -32,12 +32,17 @@ enum {
 	FAIL = -1,
 };
 
+enum send_method {
+	METHOD_OLD = 0,
+	METHOD_NEW = 1,
+	METHOD_MIX = 2,
+};
 struct config_t {
 	char		*hca_type;
 	char		ip[VL_IP_STR_LENGTH+1];
 	int		tcp;
 	int		is_daemon;
-	int		new_api;
+	enum send_method send_method;
 	int		wait;
 	enum ibv_qp_type qp_type;
 	enum ibv_wr_opcode opcode;
@@ -107,6 +112,7 @@ struct resources_t {
 	uint32_t		r_dctn;
 	uint32_t		rkey;
 	uint64_t		raddr;
+	int			method_state;
 };
 
 #endif /* GEN2_SRQ__TEST_TYPE_H */
