@@ -10,6 +10,9 @@ int force_configurations_dependencies()
 	if(config.ring_depth < config.batch_size)
 		config.ring_depth = config.batch_size;
 
+	if (config.qp_type == IBV_QPT_UD && config.is_daemon)
+		config.msg_sz += GRH_SIZE;
+
 	if(config.msg_sz % config.num_sge) {
 		VL_MISC_ERR(("Test support a msg size which is a multiplication of SGEs number\n"));
 		return FAIL;
@@ -75,6 +78,14 @@ int force_configurations_dependencies()
 	     config.qp_type != IBV_QPT_RC &&
 	     config.qp_type != IBV_QPT_XRC_SEND &&
 	     config.qp_type != IBV_QPT_XRC_RECV)) {
+		VL_MISC_ERR(("The operation is unsupported on that transport\n"));
+		return FAIL;
+	}
+
+	/* spec restrictions (TSO is just for UD underlay and raw packet)*/
+	if (config.qp_type == IBV_QPT_UD &&
+	    (config.opcode != IBV_WR_SEND &&
+	     config.opcode != IBV_WR_SEND_WITH_IMM)) {
 		VL_MISC_ERR(("The operation is unsupported on that transport\n"));
 		return FAIL;
 	}
@@ -360,6 +371,8 @@ static inline int _new_post_send(struct resources_t *resource, uint16_t batch_si
 
 		if (qpt == IBV_QPT_DRIVER)
 			mlx5dv_wr_set_dc_addr(resource->dv_qp, resource->ah, resource->r_dctn ,DC_KEY);
+		else if (qpt == IBV_QPT_UD)
+			ibv_wr_set_ud_addr(resource->eqp, resource->ah, resource->r_dctn, QKEY);
 
 		if (!inl && !list) {
 			ibv_wr_set_sge(resource->eqp,
@@ -487,6 +500,10 @@ static int post_send_method_new(struct resources_t *resource, uint16_t batch,
 			VL_MISC_ERR(("The post send properties are not supported on DC"));
 			return FAIL;
 		}
+	case IBV_QPT_UD:
+			return _new_post_send(resource, batch, t1, t2, config.use_inl,
+					      config.num_sge == 1 ? 0 : 1,
+					      config.qp_type, config.opcode);
 	default:
 			VL_MISC_ERR(("Unsupported transport"));
 			return FAIL;
@@ -782,7 +799,6 @@ static int qp_to_init(const struct resources_t *resource)
 		.qp_state        = IBV_QPS_INIT,
 		.pkey_index      = 0,
 		.port_num        = IB_PORT,
-		.qp_access_flags = 0
 	};
 	int attr_mask = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT;
 
@@ -797,6 +813,9 @@ static int qp_to_init(const struct resources_t *resource)
 		attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE |
 				       IBV_ACCESS_REMOTE_READ |
 				       IBV_ACCESS_REMOTE_ATOMIC;
+	} else if (config.qp_type == IBV_QPT_UD) {
+		attr_mask |= IBV_QP_QKEY;
+		attr.qkey = QKEY;
 	}
 
 	if (ibv_modify_qp(resource->qp, &attr, attr_mask)) {
@@ -811,33 +830,43 @@ static int qp_to_rtr(const struct resources_t *resource, const struct sync_qp_in
 {
 	struct ibv_qp_attr attr = {
 		.qp_state		= IBV_QPS_RTR,
-		.path_mtu		= IBV_MTU_1024,
-		.min_rnr_timer		= 0x10,
-		.rq_psn			= 0,
 		.ah_attr		= {
 			.is_global	= 0,
 			.sl		= 0,
 			.src_path_bits	= 0,
-			.port_num	= IB_PORT,
 			}
 		};
-	int attr_mask = IBV_QP_STATE | IBV_QP_PATH_MTU;
+	int attr_mask = IBV_QP_STATE;
 
 	if (config.qp_type == IBV_QPT_RC) {
 		attr.dest_qp_num = remote_qp->qp_num;
 		attr.ah_attr.dlid = remote_qp->lid;
 		attr.max_dest_rd_atomic = 8,
+		attr.min_rnr_timer = 0x10;
+		attr.rq_psn = 0;
+		attr.path_mtu = IBV_MTU_1024;
+		attr.ah_attr.port_num = IB_PORT;
 
 		attr_mask |= IBV_QP_AV |
 			     IBV_QP_DEST_QPN |
 			     IBV_QP_RQ_PSN |
+			     IBV_QP_PATH_MTU |
 			     IBV_QP_MAX_DEST_RD_ATOMIC |
 			     IBV_QP_MIN_RNR_TIMER;
 	} else if (config.qp_type == IBV_QPT_DRIVER && config.is_daemon) {
 		//attr.ah_attr.is_global = 1; //TODO: not sure if required
+		attr.min_rnr_timer = 0x10;
+		attr.path_mtu = IBV_MTU_1024;
+		attr.ah_attr.port_num = IB_PORT;
 
 		attr_mask |= IBV_QP_AV |
+			     IBV_QP_PATH_MTU |
 			     IBV_QP_MIN_RNR_TIMER;
+	} else if (config.qp_type == IBV_QPT_DRIVER && !config.is_daemon) {
+		/* On DCI we dont need recieve attrs */
+		attr.path_mtu = IBV_MTU_1024;
+
+		attr_mask |= IBV_QP_PATH_MTU;
 	}
 
 	if (ibv_modify_qp(resource->qp, &attr, attr_mask)) {
@@ -851,20 +880,23 @@ static int qp_to_rtr(const struct resources_t *resource, const struct sync_qp_in
 static int qp_to_rts(const struct resources_t *resource)
 {
 	struct ibv_qp_attr attr = {
-		.qp_state		= IBV_QPS_RTS,
-		.timeout		= 0x10,
-		.retry_cnt		= 7,
-		.rnr_retry		= 7,
-		.sq_psn			= 0,
-		.max_rd_atomic		= 8
+		.qp_state = IBV_QPS_RTS,
+		.sq_psn = 0,
 		};
-
 	int attr_mask = IBV_QP_STATE |
-			IBV_QP_TIMEOUT |
-			IBV_QP_RETRY_CNT |
-			IBV_QP_RNR_RETRY |
-			IBV_QP_SQ_PSN |
-			IBV_QP_MAX_QP_RD_ATOMIC;
+			IBV_QP_SQ_PSN;
+
+	if (config.qp_type == IBV_QPT_RC || config.qp_type == IBV_QPT_DRIVER) {
+		attr_mask |= IBV_QP_TIMEOUT |
+			     IBV_QP_RETRY_CNT |
+			     IBV_QP_RNR_RETRY |
+			     IBV_QP_MAX_QP_RD_ATOMIC;
+
+		attr.timeout = 0x10;
+		attr.retry_cnt = 7;
+		attr.rnr_retry = 7;
+		attr.max_rd_atomic = 8;
+	}
 
 	if (ibv_modify_qp(resource->qp, &attr, attr_mask)) {
 		VL_DATA_ERR(("Fail to modify QP to IBV_QPS_RTS."));
@@ -901,6 +933,8 @@ int init_connection(struct resources_t *resource)
 			return FAIL;
 	}
 
+	resource->r_dctn = remote_qp_info.qp_num;
+
 	VL_DATA_TRACE1(("Going to connect QP to lid 0x%x qp_num 0x%x",
 			remote_qp_info.lid,
 			remote_qp_info.qp_num));
@@ -918,7 +952,8 @@ int init_connection(struct resources_t *resource)
 
 	VL_DATA_TRACE1(("QP qp_num 0x%x is in ready state", resource->qp->qp_num));
 
-	if (config.qp_type == IBV_QPT_DRIVER && !config.is_daemon) {
+	if ((config.qp_type == IBV_QPT_DRIVER || config.qp_type == IBV_QPT_UD) &&
+	    !config.is_daemon) {
 		rc = init_ah(resource, (uint16_t)remote_qp_info.lid);
 		if (rc)
 			return FAIL;
@@ -946,6 +981,7 @@ int do_test(struct resources_t *resource)
 		if (do_sender(resource))
 			return FAIL;
 
+		VL_DATA_TRACE(("Wait for Receiver"));
 		if (VL_sock_sync_ready(&resource->sock)) {
 			VL_SOCK_ERR(("Sync after traffic"));
 			return FAIL;
@@ -972,6 +1008,7 @@ int do_test(struct resources_t *resource)
 				return FAIL;
 		}
 
+		VL_DATA_TRACE(("Wait for Sender"));
 		if (VL_sock_sync_ready(&resource->sock)) {
 			VL_SOCK_ERR(("Sync after traffic"));
 			return FAIL;

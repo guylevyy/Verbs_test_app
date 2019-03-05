@@ -9,7 +9,9 @@
 #define DEF_RING_DEPTH 64
 #define WR_ID 0xFE
 #define DC_KEY 0xffeeddcc
+#define QKEY 0x1
 #define IMM_VAL 0xCD
+#define GRH_SIZE 40
 
 #define ALWAYS_INLINE __attribute__((always_inline))
 
@@ -113,6 +115,7 @@ struct resources_t {
 	uint32_t		rkey;
 	uint64_t		raddr;
 	int			method_state;
+	uint32_t		rqpn;
 };
 
 #endif /* GEN2_SRQ__TEST_TYPE_H */

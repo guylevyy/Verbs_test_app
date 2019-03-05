@@ -247,6 +247,8 @@ static int process_arg(
 			config.qp_type = IBV_QPT_RC;
 		else if (!strcmp("DC",equ_ptr))
                         config.qp_type = IBV_QPT_DRIVER;
+		else if (!strcmp("UD",equ_ptr))
+			config.qp_type = IBV_QPT_UD;
 		else {
 			VL_MISC_ERR(("Unsupported QP Transport Service Type %s\n", equ_ptr));
 			exit(1);
