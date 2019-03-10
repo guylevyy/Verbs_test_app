@@ -443,6 +443,22 @@ static int destroy_qp(struct resources_t *resource)
 	return SUCCESS;
 }
 
+static int destroy_flow(struct resources_t *resource)
+{
+	int rc;
+
+	if (!resource->flow)
+		return SUCCESS;
+
+	VL_DATA_TRACE1(("Going to destroy flow rule"));
+	rc = ibv_destroy_flow(resource->flow);
+	CHECK_VALUE("ibv_destroy_flow", rc, 0, return FAIL);
+
+	VL_DATA_TRACE1(("Finish destroy flow rule"));
+
+	return SUCCESS;
+}
+
 static int destroy_ah(struct resources_t *resource)
 {
 	int rc;
@@ -545,6 +561,7 @@ int resource_destroy(struct resources_t *resource)
 
 	if (destroy_mw(resource) != SUCCESS ||
 	    destroy_all_mr(resource) != SUCCESS	||
+	    destroy_flow(resource) != SUCCESS ||
 	    destroy_ah(resource) != SUCCESS ||
 	    destroy_qp(resource) != SUCCESS ||
 	    destroy_srq(resource) != SUCCESS ||

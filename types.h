@@ -12,6 +12,9 @@
 #define QKEY 0x1
 #define IMM_VAL 0xCD
 #define GRH_SIZE 40
+#define MAC_LEN 6
+#define STR_MAC_LEN 18
+#define ETH_HDR_SIZE 14
 
 #define ALWAYS_INLINE __attribute__((always_inline))
 
@@ -42,6 +45,7 @@ enum send_method {
 struct config_t {
 	char		*hca_type;
 	char		ip[VL_IP_STR_LENGTH+1];
+	char 		mac[STR_MAC_LEN];
 	int		tcp;
 	int		is_daemon;
 	enum send_method send_method;
@@ -71,6 +75,7 @@ struct mr_data_t {
 struct sync_qp_info_t {
 	uint32_t	qp_num;
 	uint32_t	lid;
+	uint8_t		mac[8];
 } __attribute__ ((packed));
 
 struct sync_conf_info_t {
@@ -99,6 +104,7 @@ struct resources_t {
 	struct ibv_pd		*pd;
 	struct ibv_cq		*cq;
 	struct ibv_srq		*srq;
+	struct ibv_flow		*flow;
 	struct ibv_ah		*ah;
 	struct ibv_qp		*qp;
 	struct ibv_qp_ex	*eqp;
@@ -116,7 +122,20 @@ struct resources_t {
 	uint64_t		raddr;
 	int			method_state;
 	uint32_t		rqpn;
+	uint8_t 		dmac[MAC_LEN];
+	uint8_t 		lmac[MAC_LEN];
 };
+
+struct raw_eth_flow_attr {
+        struct ibv_flow_attr            attr;
+        struct ibv_flow_spec_eth        spec_eth;
+} __attribute__((packed));
+
+struct ETH_header {
+	uint8_t dst_mac[6];
+	uint8_t src_mac[6];
+	uint16_t eth_type;
+}__attribute__((packed));
 
 #endif /* GEN2_SRQ__TEST_TYPE_H */
 

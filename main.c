@@ -74,6 +74,13 @@ struct VL_usage_descriptor_t usage_descriptor[] = {
 	},
 
 	{
+		' ', "mac", "MAC_ADDR",
+		"Local mac to use for Raw packet transport",
+#define MAC_CMD_CASE				7
+		MAC_CMD_CASE
+	},
+
+	{
 		'd', "device", "HOST_ID",
 		"HCA to use - Default mlx5_0",
 #define HOST_CMD_CASE				8
@@ -117,7 +124,7 @@ struct VL_usage_descriptor_t usage_descriptor[] = {
 
 	{
 		't', "qp_type", "QP_TYPE",
-		"Enforce QPs type (Default: RC)",
+		"Enforce QPs type [RC/DC/UD/RAW (Default: RC)]",
 #define QP_TYPE_CMD_CASE			16
 		QP_TYPE_CMD_CASE
 	}
@@ -151,6 +158,7 @@ static void print_config(void)
 	VL_MISC_TRACE((" HCA                            : %s", config.hca_type));
 	VL_MISC_TRACE((" Number of iterations           : %d", config.num_of_iter));
 	VL_MISC_TRACE((" QP Type                        : %s", (VL_ibv_qp_type_str(config.qp_type))));
+	VL_MISC_TRACE((" MAC                            : %s", config.mac));
 	VL_MISC_TRACE((" Opcode                         : %s", (VL_ibv_wr_opcode_str(config.opcode))));
 	VL_MISC_TRACE((" Ring-depth                     : %u", config.ring_depth));
 	VL_MISC_TRACE((" msg size                       : %u", config.msg_sz));
@@ -209,6 +217,10 @@ static int process_arg(
 		config.hca_type = equ_ptr;
 		break;
 
+	case MAC_CMD_CASE:
+		strcpy(config.mac, equ_ptr);
+		break;
+
 	case WAIT_CMD_CASE:
 		config.wait = 1;
 		break;
@@ -249,6 +261,8 @@ static int process_arg(
                         config.qp_type = IBV_QPT_DRIVER;
 		else if (!strcmp("UD",equ_ptr))
 			config.qp_type = IBV_QPT_UD;
+		else if (!strcmp("RAW",equ_ptr))
+			config.qp_type = IBV_QPT_RAW_PACKET;
 		else {
 			VL_MISC_ERR(("Unsupported QP Transport Service Type %s\n", equ_ptr));
 			exit(1);

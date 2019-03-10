@@ -1,4 +1,5 @@
 #include <vl.h>
+#include <ctype.h>
 #include "types.h"
 #include "get_clock.h"
 #include <infiniband/mlx5dv.h>
@@ -12,6 +13,12 @@ int force_configurations_dependencies()
 
 	if (config.qp_type == IBV_QPT_UD && config.is_daemon)
 		config.msg_sz += GRH_SIZE;
+
+	if (config.qp_type == IBV_QPT_RAW_PACKET &&
+	    config.msg_sz < 64) {
+		VL_MISC_ERR(("Raw packet transport requires minimum 64B of message size\n"));
+		return FAIL;
+	}
 
 	if(config.msg_sz % config.num_sge) {
 		VL_MISC_ERR(("Test support a msg size which is a multiplication of SGEs number\n"));
@@ -29,6 +36,12 @@ int force_configurations_dependencies()
 	if ((config.send_method == METHOD_OLD || config.send_method == METHOD_MIX) &&
 	    config.qp_type == IBV_QPT_DRIVER && !config.is_daemon) {
 		VL_MISC_ERR(("OLD and MIX methods don't support DC\n"));
+		return FAIL;
+	}
+
+	if (config.qp_type == IBV_QPT_RAW_PACKET &&
+	    strlen(config.mac) != STR_MAC_LEN - 1) {
+		VL_MISC_ERR(("Invalid local MAC address %d\n", strlen(config.mac)));
 		return FAIL;
 	}
 
@@ -86,6 +99,15 @@ int force_configurations_dependencies()
 	if (config.qp_type == IBV_QPT_UD &&
 	    (config.opcode != IBV_WR_SEND &&
 	     config.opcode != IBV_WR_SEND_WITH_IMM)) {
+		VL_MISC_ERR(("The operation is unsupported on that transport\n"));
+		return FAIL;
+	}
+
+	/* spec restrictions (TSO is just for UD underlay and raw packet)*/
+	if (config.qp_type == IBV_QPT_RAW_PACKET &&
+	    (config.opcode != IBV_WR_SEND &&
+	     config.opcode != IBV_WR_SEND_WITH_IMM &&
+	     config.opcode != IBV_WR_TSO)) {
 		VL_MISC_ERR(("The operation is unsupported on that transport\n"));
 		return FAIL;
 	}
@@ -501,6 +523,7 @@ static int post_send_method_new(struct resources_t *resource, uint16_t batch,
 			return FAIL;
 		}
 	case IBV_QPT_UD:
+	case IBV_QPT_RAW_PACKET:
 			return _new_post_send(resource, batch, t1, t2, config.use_inl,
 					      config.num_sge == 1 ? 0 : 1,
 					      config.qp_type, config.opcode);
@@ -793,6 +816,100 @@ static int init_ah(struct resources_t *resource, uint16_t dlid)
 	return SUCCESS;
 }
 
+//convert mac string xx:xx:xx:xx:xx:xx to byte array
+#define MAC_SEP ':'
+static char *mac_string_to_byte(const char *mac_string, uint8_t *mac_bytes)
+{
+	int counter;
+	for (counter = 0; counter < 6; ++counter) {
+		unsigned int number = 0;
+		char ch;
+
+		//Convert letter into lower case.
+		ch = tolower(*mac_string++);
+
+		if ((ch < '0' || ch > '9') && (ch < 'a' || ch > 'f')) {
+			return NULL;
+		}
+
+		number = isdigit (ch) ? (ch - '0') : (ch - 'a' + 10);
+		ch = tolower(*mac_string);
+
+		if ((counter < 5 && ch != MAC_SEP) || (counter == 5 && ch != '\0'
+				&& !isspace (ch))) {
+			++mac_string;
+
+			if ((ch < '0' || ch > '9') && (ch < 'a' || ch > 'f')) {
+				return NULL;
+			}
+
+			number <<= 4;
+			number += isdigit (ch) ? (ch - '0') : (ch - 'a' + 10);
+			ch = *mac_string;
+
+			if (counter < 5 && ch != MAC_SEP) {
+				return NULL;
+			}
+		}
+		mac_bytes[counter] = (unsigned char) number;
+		++mac_string;
+	}
+	return (char *) mac_bytes;
+}
+
+static int init_mcast_mac_flow(struct resources_t *resource, uint8_t *mmac)
+{
+	struct raw_eth_flow_attr flow_attr = {
+		.attr = {
+			.comp_mask      = 0,
+			.type           = IBV_FLOW_ATTR_NORMAL,
+			.size           = sizeof(flow_attr),
+			.priority       = 0,
+			.num_of_specs   = 1,
+			.port           = IB_PORT,
+			.flags          = 0,
+		},
+		.spec_eth = {
+			.type   = IBV_FLOW_SPEC_ETH,
+			.size   = sizeof(struct ibv_flow_spec_eth),
+			.val = {
+				.dst_mac = { mmac[0], mmac[1], mmac[2], mmac[3], mmac[4], mmac[5]},
+				.src_mac = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+				.ether_type = 0,
+				.vlan_tag = 0,
+			},
+			.mask = {
+				.dst_mac = { 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF},
+				.src_mac = { 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+				.ether_type = 0,
+				.vlan_tag = 0,
+			}
+		}
+	};
+
+	VL_DATA_TRACE1(("Going to create flow rule"));
+
+	resource->flow = ibv_create_flow(resource->qp , &flow_attr.attr);
+	if (!resource->flow) {
+		VL_DATA_ERR(("Fail to create flow rule (errno %d)", errno));
+		return FAIL;
+	}
+
+	VL_DATA_TRACE1(("Finish to create flow rule"));
+
+	return SUCCESS;
+}
+
+static void init_eth_header(struct resources_t *resource, uint8_t *smac, uint8_t *dmac)
+{
+	struct ETH_header *eth_header = resource->mr->addr;
+	size_t frame_size = config.msg_sz;
+
+	memcpy(eth_header->src_mac, smac, MAC_LEN);
+	memcpy(eth_header->dst_mac, dmac, MAC_LEN);
+	eth_header->eth_type = htons(frame_size - ETH_HDR_SIZE); /* Payload and CRC */
+}
+
 static int qp_to_init(const struct resources_t *resource)
 {
 	struct ibv_qp_attr attr = {
@@ -800,21 +917,23 @@ static int qp_to_init(const struct resources_t *resource)
 		.pkey_index      = 0,
 		.port_num        = IB_PORT,
 	};
-	int attr_mask = IBV_QP_STATE | IBV_QP_PKEY_INDEX | IBV_QP_PORT;
+	int attr_mask = IBV_QP_STATE | IBV_QP_PORT;
 
-	if (config.qp_type == IBV_QPT_RC) {
-		attr_mask |= IBV_QP_ACCESS_FLAGS;
+	if (config.qp_type == IBV_QPT_RC) { //RC
+		attr_mask |= IBV_QP_ACCESS_FLAGS | IBV_QP_PKEY_INDEX;
 		attr.qp_access_flags = IBV_ACCESS_LOCAL_WRITE |
 				       IBV_ACCESS_REMOTE_WRITE |
 				       IBV_ACCESS_REMOTE_READ |
 				       IBV_ACCESS_REMOTE_ATOMIC;
-	} else if (config.qp_type == IBV_QPT_DRIVER && config.is_daemon) {
-		attr_mask |= IBV_QP_ACCESS_FLAGS;
+	} else if (config.qp_type == IBV_QPT_DRIVER && config.is_daemon) { //DCT
+		attr_mask |= IBV_QP_ACCESS_FLAGS | IBV_QP_PKEY_INDEX;
 		attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE |
 				       IBV_ACCESS_REMOTE_READ |
 				       IBV_ACCESS_REMOTE_ATOMIC;
-	} else if (config.qp_type == IBV_QPT_UD) {
-		attr_mask |= IBV_QP_QKEY;
+	} else if (config.qp_type == IBV_QPT_DRIVER && !config.is_daemon) { //DCI
+		attr_mask |= IBV_QP_PKEY_INDEX;
+	} else if (config.qp_type == IBV_QPT_UD) { //UD
+		attr_mask |= IBV_QP_QKEY | IBV_QP_PKEY_INDEX;
 		attr.qkey = QKEY;
 	}
 
@@ -881,21 +1000,25 @@ static int qp_to_rts(const struct resources_t *resource)
 {
 	struct ibv_qp_attr attr = {
 		.qp_state = IBV_QPS_RTS,
-		.sq_psn = 0,
 		};
-	int attr_mask = IBV_QP_STATE |
-			IBV_QP_SQ_PSN;
+	int attr_mask = IBV_QP_STATE;
 
 	if (config.qp_type == IBV_QPT_RC || config.qp_type == IBV_QPT_DRIVER) {
 		attr_mask |= IBV_QP_TIMEOUT |
 			     IBV_QP_RETRY_CNT |
 			     IBV_QP_RNR_RETRY |
+			     IBV_QP_SQ_PSN |
 			     IBV_QP_MAX_QP_RD_ATOMIC;
 
+		attr.sq_psn = 0,
 		attr.timeout = 0x10;
 		attr.retry_cnt = 7;
 		attr.rnr_retry = 7;
 		attr.max_rd_atomic = 8;
+	} else if (config.qp_type != IBV_QPT_RAW_PACKET) {
+		attr_mask |= IBV_QP_SQ_PSN;
+
+		attr.sq_psn = 0;
 	}
 
 	if (ibv_modify_qp(resource->qp, &attr, attr_mask)) {
@@ -914,6 +1037,7 @@ int init_connection(struct resources_t *resource)
 
 	local_qp_info.qp_num = resource->qp->qp_num;
 	local_qp_info.lid = resource->hca_p->port_attr.lid;
+	mac_string_to_byte(config.mac, local_qp_info.mac);
 
 	if (!config.is_daemon) {
 		rc = send_info(resource, &local_qp_info, sizeof(local_qp_info));
@@ -957,6 +1081,17 @@ int init_connection(struct resources_t *resource)
 		rc = init_ah(resource, (uint16_t)remote_qp_info.lid);
 		if (rc)
 			return FAIL;
+	}
+
+	if (config.qp_type == IBV_QPT_RAW_PACKET) {
+		if (config.is_daemon) {
+			rc = init_mcast_mac_flow(resource, local_qp_info.mac);
+			if (rc)
+				return FAIL;
+		} else {
+			init_eth_header(resource, local_qp_info.mac, remote_qp_info.mac);
+		}
+
 	}
 
 	VL_DATA_TRACE(("init_connection is done"));
