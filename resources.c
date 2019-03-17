@@ -191,21 +191,89 @@ static int init_cq(struct resources_t *resource)
 	return SUCCESS;
 }
 
-static int init_srq(struct resources_t *resource)
+static int init_xrcd(struct resources_t *resource)
 {
-	struct ibv_srq_init_attr attr;
-	uint32_t srqn;
 
-	if (config.qp_type != IBV_QPT_DRIVER || !config.is_daemon)
+	struct ibv_xrcd_init_attr xrcd_attr;
+	int fd;
+
+	if (config.qp_type != IBV_QPT_XRC_SEND && config.qp_type != IBV_QPT_XRC_RECV)
 		return SUCCESS;
 
+	VL_HCA_TRACE1(("Going to create XRCD"));
+
+	fd = open("/dev/null", O_WRONLY);
+	if (fd < 0) {
+		VL_DATA_ERR(("Fail to open a file"));
+		return FAIL;
+	}
+
+	memset(&xrcd_attr, 0, sizeof(xrcd_attr));
+	xrcd_attr.comp_mask = IBV_XRCD_INIT_ATTR_FD | IBV_XRCD_INIT_ATTR_OFLAGS;
+        xrcd_attr.fd = fd;
+        xrcd_attr.oflags = O_CREAT;
+
+	resource->xrcd = ibv_open_xrcd(resource->hca_p->context, &xrcd_attr);
+
+	VL_DATA_TRACE1(("Finish init XRCD"));
+
+	return SUCCESS;
+}
+
+static int destroy_xrcd(struct resources_t *resource)
+{
+	int rc;
+	int rc_1 = SUCCESS;
+
+	if (resource->fd < 0)
+		return SUCCESS;
+
+	if (resource->xrcd) {
+		VL_DATA_TRACE1(("Going to close XRCD"));
+		rc_1 = ibv_close_xrcd(resource->xrcd);
+		CHECK_VALUE("ibv_close_xrcd", rc_1, 0, );
+		VL_DATA_TRACE1(("Finish closing XRCD"));
+	}
+
+	VL_DATA_TRACE1(("Going to close fd"));
+	rc = close(resource->fd);
+	CHECK_VALUE("close(fd)", rc, 0, return FAIL);
+	VL_DATA_TRACE1(("Finish closing fd"));
+
+	if (rc_1 != 0)
+		return FAIL;
+
+	return SUCCESS;
+}
+
+static int init_srq(struct resources_t *resource)
+{
+	struct ibv_srq_init_attr_ex attr;
+	uint32_t srqn;
+
+	if ((config.qp_type != IBV_QPT_DRIVER && config.qp_type != IBV_QPT_XRC_RECV) || !config.is_daemon)
+		return SUCCESS;
+
+	VL_HCA_TRACE1(("Going to create SRQ"));
+
 	memset(&attr, 0, sizeof(attr));
+        attr.comp_mask = IBV_SRQ_INIT_ATTR_TYPE | IBV_SRQ_INIT_ATTR_PD;
 	attr.attr.max_wr = config.ring_depth;
 	attr.attr.max_sge = config.num_sge;
+	attr.pd = resource->pd;
 
-	resource->srq = ibv_create_srq(resource->pd, &attr);
+	if (config.qp_type == IBV_QPT_DRIVER) {
+		attr.srq_type = IBV_SRQT_BASIC;
+	} else {
+		attr.comp_mask |= IBV_SRQ_INIT_ATTR_XRCD | IBV_SRQ_INIT_ATTR_CQ;
+		attr.srq_type = IBV_SRQT_XRC;
+		attr.xrcd = resource->xrcd;
+		attr.cq = resource->cq;
+	}
+
+	resource->srq = ibv_create_srq_ex(resource->hca_p->context, &attr);
 	if (!resource->srq) {
-		VL_DATA_ERR(("Fail in ibv_create_srq"));
+		VL_DATA_ERR(("Fail in ibv_create_srq_ex"));
 		return FAIL;
 	}
 
@@ -223,7 +291,8 @@ static int init_qp(struct resources_t *resource)
 	struct ibv_qp_init_attr_ex attr_ex;
 	struct mlx5dv_qp_init_attr attr_dv;
 
-	if (config.send_method || config.qp_type == IBV_QPT_DRIVER) {
+	if (config.send_method || config.qp_type == IBV_QPT_DRIVER ||
+	    config.qp_type == IBV_QPT_XRC_RECV) {
 		memset(&attr_dv, 0, sizeof(attr_dv));
 		memset(&attr_ex, 0, sizeof(attr_ex));
 		attr = (struct ibv_qp_init_attr *)&attr_ex;
@@ -233,28 +302,36 @@ static int init_qp(struct resources_t *resource)
 	}
 
 	attr->qp_type = config.qp_type;
-	attr->recv_cq = resource->cq;
-	attr->send_cq = resource->cq; /* Relevant also for DCT */
+	VL_DATA_TRACE1(("Going to create QP type %s:", VL_ibv_qp_type_str(config.qp_type)));
 
-	/* DCT nor DCI has receive properties */
-	if (config.qp_type != IBV_QPT_DRIVER) {
+	if (config.qp_type != IBV_QPT_XRC_RECV || config.qp_type != IBV_QPT_XRC_SEND)
+		attr->recv_cq = resource->cq;
+	if (config.qp_type != IBV_QPT_XRC_RECV)
+		attr->send_cq = resource->cq; /* Relevant also for DCT */
+
+	/* DCT nor DCI nor XRC_SEND nor XRC_RECV_has receive properties */
+	if (config.qp_type != IBV_QPT_DRIVER && config.qp_type != IBV_QPT_XRC_SEND &&
+	    config.qp_type != IBV_QPT_XRC_RECV) {
 		attr->cap.max_recv_sge = config.num_sge;
 		attr->cap.max_recv_wr = config.ring_depth;
+
+		VL_DATA_TRACE1(("max_recv_wr %d, max_recv_sge %d",
+				attr->cap.max_recv_wr,
+				attr->cap.max_recv_sge));
 	}
 
-	/* We dont want to configure send properties on DCT */
-	if (!(config.qp_type == IBV_QPT_DRIVER && config.is_daemon)) {
+	/* We dont want to configure send properties on DCT or XRC_RECV*/
+	if (!(config.qp_type == IBV_QPT_DRIVER && config.is_daemon) && config.qp_type != IBV_QPT_XRC_RECV) {
 		attr->sq_sig_all = 1;
 		attr->cap.max_inline_data = config.use_inl ? config.msg_sz : 0;
 		attr->cap.max_send_sge = config.num_sge;
 		attr->cap.max_send_wr = config.ring_depth;
-	}
 
-	VL_DATA_TRACE1(("Going to create QP type %s, max_send_wr %d, max_send_sge %d max_inline_data %d",
-			VL_ibv_qp_type_str(config.qp_type),
-			attr->cap.max_send_wr,
-			attr->cap.max_send_sge,
-			attr->cap.max_inline_data));
+		VL_DATA_TRACE1(("max_send_wr %d, max_send_sge %d max_inline_data %d",
+				attr->cap.max_send_wr,
+				attr->cap.max_send_sge,
+				attr->cap.max_inline_data));
+	}
 
 	if (config.send_method) { // And correspondingly a client
 		attr_ex.comp_mask |= IBV_QP_INIT_ATTR_SEND_OPS_FLAGS | IBV_QP_INIT_ATTR_PD;
@@ -301,6 +378,11 @@ static int init_qp(struct resources_t *resource)
 			attr_dv.dc_init_attr.dc_type = MLX5DV_DCTYPE_DCT;
 			attr_dv.dc_init_attr.dct_access_key = DC_KEY;
 			resource->qp = mlx5dv_create_qp(resource->hca_p->context, &attr_ex, &attr_dv);
+		} else if (config.qp_type == IBV_QPT_XRC_RECV) {
+			attr_ex.comp_mask |= IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_XRCD;
+			attr_ex.pd = resource->pd;
+			attr_ex.xrcd = resource->xrcd;
+			resource->qp = ibv_create_qp_ex(resource->hca_p->context, &attr_ex);
 		} else {
 			resource->qp = ibv_create_qp(resource->pd, &attr_leg);
 		}
@@ -380,6 +462,7 @@ int resource_init(struct resources_t *resource)
 	if (init_socket(resource) != SUCCESS ||
 	    init_hca(resource) != SUCCESS ||
 	    init_pd(resource) != SUCCESS ||
+	    init_xrcd(resource) != SUCCESS ||
 	    init_cq(resource) != SUCCESS ||
 	    init_srq(resource) != SUCCESS ||
 	    init_qp(resource) != SUCCESS ||
@@ -566,6 +649,7 @@ int resource_destroy(struct resources_t *resource)
 	    destroy_qp(resource) != SUCCESS ||
 	    destroy_srq(resource) != SUCCESS ||
 	    destroy_cq(resource) != SUCCESS ||
+	    destroy_xrcd(resource) != SUCCESS ||
 	    destroy_pd(resource) != SUCCESS ||
 	    destroy_hca(resource) != SUCCESS)
 		result1 = FAIL;

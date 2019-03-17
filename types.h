@@ -103,6 +103,8 @@ struct resources_t {
 	struct hca_data_t	*hca_p;
 	struct ibv_pd		*pd;
 	struct ibv_cq		*cq;
+	int			fd;
+	struct ibv_xrcd		*xrcd;
 	struct ibv_srq		*srq;
 	struct ibv_flow		*flow;
 	struct ibv_ah		*ah;
