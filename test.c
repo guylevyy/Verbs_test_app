@@ -279,7 +279,7 @@ static int prepare_receiver(struct resources_t *resource)
 		struct ibv_recv_wr *bad_wr = NULL;
 		int rc;
 
-		if (config.qp_type != IBV_QPT_DRIVER)
+		if (config.qp_type != IBV_QPT_DRIVER && config.qp_type != IBV_QPT_XRC_RECV)
 			rc = ibv_post_recv(resource->qp, resource->recv_wr_arr, &bad_wr);
 		else
 			rc = ibv_post_srq_recv(resource->srq, resource->recv_wr_arr, &bad_wr);
@@ -395,6 +395,8 @@ static inline int _new_post_send(struct resources_t *resource, uint16_t batch_si
 			mlx5dv_wr_set_dc_addr(resource->dv_qp, resource->ah, resource->r_dctn ,DC_KEY);
 		else if (qpt == IBV_QPT_UD)
 			ibv_wr_set_ud_addr(resource->eqp, resource->ah, resource->r_dctn, QKEY);
+		else if (qpt == IBV_QPT_XRC_SEND)
+			ibv_wr_set_xrc_srqn(resource->eqp, resource->r_dctn);
 
 		if (!inl && !list) {
 			ibv_wr_set_sge(resource->eqp,
@@ -524,6 +526,7 @@ static int post_send_method_new(struct resources_t *resource, uint16_t batch,
 		}
 	case IBV_QPT_UD:
 	case IBV_QPT_RAW_PACKET:
+	case IBV_QPT_XRC_SEND:
 			return _new_post_send(resource, batch, t1, t2, config.use_inl,
 					      config.num_sge == 1 ? 0 : 1,
 					      config.qp_type, config.opcode);
@@ -690,7 +693,7 @@ static int do_receiver(struct resources_t *resource)
 
 			fast_set_recv_wr(resource->recv_wr_arr, batch);
 
-			if (config.qp_type != IBV_QPT_DRIVER)
+			if (config.qp_type != IBV_QPT_DRIVER && config.qp_type != IBV_QPT_XRC_RECV)
 				rc = ibv_post_recv(resource->qp, resource->recv_wr_arr, &bad_wr);
 			else
 				rc = ibv_post_srq_recv(resource->srq, resource->recv_wr_arr, &bad_wr);
@@ -717,8 +720,10 @@ int sync_configurations(struct resources_t *resource)
 	int rc;
 
 	local_info.iter = config.num_of_iter;
-	local_info.qp_type = config.qp_type;
 	local_info.opcode = config.opcode;
+	local_info.qp_type = config.qp_type == IBV_QPT_XRC_RECV ?
+			     IBV_QPT_XRC_SEND : /* Hack the XRC QPTs sync*/
+			     config.qp_type;
 
 	if (!config.is_daemon) {
 		rc = send_info(resource, &local_info, sizeof(local_info));
@@ -740,7 +745,7 @@ int sync_configurations(struct resources_t *resource)
 
 	if (config.num_of_iter != remote_info.iter ||
 	    config.opcode != remote_info.opcode ||
-	    config.qp_type != remote_info.qp_type) {
+	    local_info.qp_type != remote_info.qp_type) {
 		VL_SOCK_ERR(("Server-client configurations are not synced"));
 		return FAIL;
 	}
@@ -761,7 +766,7 @@ int sync_post_connection(struct resources_t *resource)
 		if (rc)
 			return FAIL;
 
-		if (config.qp_type == IBV_QPT_DRIVER)
+		if (config.qp_type == IBV_QPT_DRIVER || config.qp_type == IBV_QPT_XRC_SEND)
 			resource->r_dctn = remote_info.dctn;
 
 		if (config.opcode == IBV_WR_RDMA_WRITE ||
@@ -777,6 +782,8 @@ int sync_post_connection(struct resources_t *resource)
 
 		if (config.qp_type == IBV_QPT_DRIVER)
 			local_info.dctn = resource->qp->qp_num;
+		else if (config.qp_type == IBV_QPT_XRC_RECV)
+			ibv_get_srq_num(resource->srq, &local_info.dctn);
 
 		if (config.opcode == IBV_WR_RDMA_WRITE ||
 		    config.opcode == IBV_WR_RDMA_WRITE_WITH_IMM ||
@@ -925,17 +932,21 @@ static int qp_to_init(const struct resources_t *resource)
 				       IBV_ACCESS_REMOTE_WRITE |
 				       IBV_ACCESS_REMOTE_READ |
 				       IBV_ACCESS_REMOTE_ATOMIC;
-	} else if (config.qp_type == IBV_QPT_DRIVER && config.is_daemon) { //DCT
+	} else if ((config.qp_type == IBV_QPT_DRIVER && config.is_daemon) ||
+		   config.qp_type == IBV_QPT_XRC_RECV) { //DCT and XRC_RECV
 		attr_mask |= IBV_QP_ACCESS_FLAGS | IBV_QP_PKEY_INDEX;
 		attr.qp_access_flags = IBV_ACCESS_REMOTE_WRITE |
 				       IBV_ACCESS_REMOTE_READ |
 				       IBV_ACCESS_REMOTE_ATOMIC;
 	} else if (config.qp_type == IBV_QPT_DRIVER && !config.is_daemon) { //DCI
 		attr_mask |= IBV_QP_PKEY_INDEX;
+	} else if (config.qp_type == IBV_QPT_XRC_SEND) { //XRC_SEND
+		attr_mask |= IBV_QP_PKEY_INDEX | IBV_QP_ACCESS_FLAGS;
 	} else if (config.qp_type == IBV_QPT_UD) { //UD
 		attr_mask |= IBV_QP_QKEY | IBV_QP_PKEY_INDEX;
 		attr.qkey = QKEY;
 	}
+	/* else Raw-Packet */
 
 	if (ibv_modify_qp(resource->qp, &attr, attr_mask)) {
 		VL_DATA_ERR(("Fail to modify QP to IBV_QPS_INIT"));
@@ -957,7 +968,7 @@ static int qp_to_rtr(const struct resources_t *resource, const struct sync_qp_in
 		};
 	int attr_mask = IBV_QP_STATE;
 
-	if (config.qp_type == IBV_QPT_RC) {
+	if (config.qp_type == IBV_QPT_RC || config.qp_type == IBV_QPT_XRC_RECV) {
 		attr.dest_qp_num = remote_qp->qp_num;
 		attr.ah_attr.dlid = remote_qp->lid;
 		attr.max_dest_rd_atomic = 8,
@@ -972,7 +983,18 @@ static int qp_to_rtr(const struct resources_t *resource, const struct sync_qp_in
 			     IBV_QP_PATH_MTU |
 			     IBV_QP_MAX_DEST_RD_ATOMIC |
 			     IBV_QP_MIN_RNR_TIMER;
-	} else if (config.qp_type == IBV_QPT_DRIVER && config.is_daemon) {
+	} else if (config.qp_type == IBV_QPT_XRC_SEND) {
+		attr.dest_qp_num = remote_qp->qp_num;
+		attr.ah_attr.dlid = remote_qp->lid;
+		attr.rq_psn = 0;
+		attr.path_mtu = IBV_MTU_1024;
+		attr.ah_attr.port_num = IB_PORT;
+
+		attr_mask |= IBV_QP_AV |
+			     IBV_QP_DEST_QPN |
+			     IBV_QP_RQ_PSN |
+			     IBV_QP_PATH_MTU;
+	} else if (config.qp_type == IBV_QPT_DRIVER && config.is_daemon) { //DCT
 		//attr.ah_attr.is_global = 1; //TODO: not sure if required
 		attr.min_rnr_timer = 0x10;
 		attr.path_mtu = IBV_MTU_1024;
@@ -981,12 +1003,13 @@ static int qp_to_rtr(const struct resources_t *resource, const struct sync_qp_in
 		attr_mask |= IBV_QP_AV |
 			     IBV_QP_PATH_MTU |
 			     IBV_QP_MIN_RNR_TIMER;
-	} else if (config.qp_type == IBV_QPT_DRIVER && !config.is_daemon) {
+	} else if (config.qp_type == IBV_QPT_DRIVER && !config.is_daemon) { //DCI
 		/* On DCI we dont need recieve attrs */
 		attr.path_mtu = IBV_MTU_1024;
 
 		attr_mask |= IBV_QP_PATH_MTU;
 	}
+	/* else Raw-Packet or UD*/
 
 	if (ibv_modify_qp(resource->qp, &attr, attr_mask)) {
 		VL_DATA_ERR(("Fail to modify QP, to IBV_QPS_RTR"));
@@ -1003,7 +1026,8 @@ static int qp_to_rts(const struct resources_t *resource)
 		};
 	int attr_mask = IBV_QP_STATE;
 
-	if (config.qp_type == IBV_QPT_RC || config.qp_type == IBV_QPT_DRIVER) {
+	if (config.qp_type == IBV_QPT_RC || config.qp_type == IBV_QPT_DRIVER ||
+	    config.qp_type == IBV_QPT_XRC_SEND) {
 		attr_mask |= IBV_QP_TIMEOUT |
 			     IBV_QP_RETRY_CNT |
 			     IBV_QP_RNR_RETRY |
@@ -1036,6 +1060,7 @@ int init_connection(struct resources_t *resource)
 	int rc;
 
 	local_qp_info.qp_num = resource->qp->qp_num;
+
 	local_qp_info.lid = resource->hca_p->port_attr.lid;
 	mac_string_to_byte(config.mac, local_qp_info.mac);
 

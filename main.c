@@ -5,6 +5,7 @@
 #include "types.h"
 #include "resources.h"
 #include "test.h"
+#include "infiniband/verbs.h"
 
 struct config_t config = {
 	.hca_type = "mlx5_0",
@@ -124,7 +125,7 @@ struct VL_usage_descriptor_t usage_descriptor[] = {
 
 	{
 		't', "qp_type", "QP_TYPE",
-		"Enforce QPs type [RC/DC/UD/RAW (Default: RC)]",
+		"Enforce QPs type [RC/DC/UD/RAW/XRC (Default: RC)]",
 #define QP_TYPE_CMD_CASE			16
 		QP_TYPE_CMD_CASE
 	}
@@ -255,15 +256,20 @@ static int process_arg(
 		break;
 
 	case QP_TYPE_CMD_CASE:
-		if (!strcmp("RC",equ_ptr))
+		if (!strcmp("RC",equ_ptr)) {
 			config.qp_type = IBV_QPT_RC;
-		else if (!strcmp("DC",equ_ptr))
+		} else if (!strcmp("DC",equ_ptr)) {
                         config.qp_type = IBV_QPT_DRIVER;
-		else if (!strcmp("UD",equ_ptr))
+		} else if (!strcmp("UD",equ_ptr)) {
 			config.qp_type = IBV_QPT_UD;
-		else if (!strcmp("RAW",equ_ptr))
+		} else if (!strcmp("RAW",equ_ptr)) {
 			config.qp_type = IBV_QPT_RAW_PACKET;
-		else {
+		} else if (!strcmp("XRC",equ_ptr)) {
+			if (config.is_daemon)
+				config.qp_type = IBV_QPT_XRC_RECV;
+			else
+				config.qp_type = IBV_QPT_XRC_SEND;
+		} else {
 			VL_MISC_ERR(("Unsupported QP Transport Service Type %s\n", equ_ptr));
 			exit(1);
 		}
@@ -339,7 +345,8 @@ int main(
 		.sock = {
 			.ip = "127.0.0.1",
 			.port = 15000
-		}
+		},
+		.fd = -1
 	};
 	int rc = SUCCESS;
 
