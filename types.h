@@ -43,6 +43,7 @@ enum send_method {
 	METHOD_NEW = 1,
 	METHOD_MIX = 2,
 };
+
 struct config_t {
 	char		*hca_type;
 	char		ip[VL_IP_STR_LENGTH+1];
@@ -53,6 +54,7 @@ struct config_t {
 	int		wait;
 	enum ibv_qp_type qp_type;
 	enum ibv_wr_opcode opcode;
+	int ext_atomic;
 	int		use_inl;
 	size_t		msg_sz;
 	uint16_t	batch_size;
@@ -123,6 +125,7 @@ struct resources_t {
 	uint32_t		r_dctn;
 	uint32_t		rkey;
 	uint64_t		raddr;
+	void			*atomic_args;
 	int			method_state;
 	uint32_t		rqpn;
 	uint8_t 		dmac[MAC_LEN];

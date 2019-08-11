@@ -22,6 +22,7 @@ struct config_t config = {
 	.send_method = METHOD_OLD,
 	.use_inl = 0,
 	.num_sge = DEF_NUM_SGE,
+	.ext_atomic = 0,
 };
 
 struct VL_usage_descriptor_t usage_descriptor[] = {
@@ -55,7 +56,8 @@ struct VL_usage_descriptor_t usage_descriptor[] = {
 
 	{
 		'o', "opcode", "OPCODE",
-		"Message opcode (SEND (default), SEND_IMM, SEND_INV, WRITE, WRITE_IMM, READ, BIND, LOCAL_INV)",
+		"Message opcode (SEND (default), SEND_IMM, SEND_INV, WRITE, WRITE_IMM, READ, BIND, LOCAL_INV,"
+		"\n\tATOMIC_FA, ATOMIC_CS, EXT_ATOMIC_FA, EXT_ATOMIC_CS)",
 #define OP_CMD_CASE				4
 		OP_CMD_CASE
 	},
@@ -276,27 +278,33 @@ static int process_arg(
                 break;
 
 	case OP_CMD_CASE:
-		if (!strcmp("SEND",equ_ptr))
+		if (!strcmp("SEND",equ_ptr)) {
 			config.opcode = IBV_WR_SEND;
-		else if (!strcmp("SEND_IMM",equ_ptr))
+		} else if (!strcmp("SEND_IMM",equ_ptr)) {
 			config.opcode = IBV_WR_SEND_WITH_IMM;
-		else if (!strcmp("WRITE",equ_ptr))
-                        config.opcode = IBV_WR_RDMA_WRITE;
-		else if (!strcmp("WRITE_IMM",equ_ptr))
+		} else if (!strcmp("WRITE",equ_ptr)) {
+			config.opcode = IBV_WR_RDMA_WRITE;
+		} else if (!strcmp("WRITE_IMM",equ_ptr)) {
 			config.opcode = IBV_WR_RDMA_WRITE_WITH_IMM;
-		else if (!strcmp("READ",equ_ptr))
+		} else if (!strcmp("READ",equ_ptr)) {
 			config.opcode = IBV_WR_RDMA_READ;
-		else if (!strcmp("ATOMIC_FA",equ_ptr))
+		} else if (!strcmp("ATOMIC_FA",equ_ptr)) {
 			config.opcode = IBV_WR_ATOMIC_FETCH_AND_ADD;
-		else if (!strcmp("ATOMIC_CS",equ_ptr))
+		} else if (!strcmp("ATOMIC_CS",equ_ptr)) {
 			config.opcode = IBV_WR_ATOMIC_CMP_AND_SWP;
-		else if (!strcmp("BIND",equ_ptr))
+		} else if (!strcmp("EXT_ATOMIC_FA",equ_ptr)) {
+			config.ext_atomic = 1;
+			config.opcode = IBV_WR_ATOMIC_FETCH_AND_ADD;
+		} else if (!strcmp("EXT_ATOMIC_CS",equ_ptr)) {
+			config.ext_atomic = 1;
+			config.opcode = IBV_WR_ATOMIC_CMP_AND_SWP;
+		} else if (!strcmp("BIND",equ_ptr)) {
 			config.opcode = IBV_WR_BIND_MW;
-		else if (!strcmp("LOCAL_INV",equ_ptr))
+		} else if (!strcmp("LOCAL_INV",equ_ptr)) {
 			config.opcode = IBV_WR_LOCAL_INV;
-		else if (!strcmp("SEND_INV",equ_ptr))
+		} else if (!strcmp("SEND_INV",equ_ptr)) {
 			config.opcode = IBV_WR_SEND_WITH_INV;
-		else {
+		} else {
 			VL_MISC_ERR(("Unsupported opcode %s\n", equ_ptr));
 			exit(1);
 		}

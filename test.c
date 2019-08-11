@@ -2,6 +2,7 @@
 #include <ctype.h>
 #include "types.h"
 #include "get_clock.h"
+#include <assert.h>
 #include <infiniband/mlx5dv.h>
 
 extern struct config_t config;
@@ -53,10 +54,10 @@ int force_configurations_dependencies()
 		return FAIL;
 	}
 
-	if (config.msg_sz != 8 &&
+	if (config.msg_sz != 8 && !config.ext_atomic &&
 	    (config.opcode == IBV_WR_ATOMIC_FETCH_AND_ADD ||
 	     config.opcode == IBV_WR_ATOMIC_CMP_AND_SWP)) {
-		VL_MISC_ERR(("Atomic operations require minimum 8B buffer\n"));
+		VL_MISC_ERR(("Standard atomic operations require minimum 8B buffer\n"));
 		return FAIL;
 	}
 
@@ -353,10 +354,20 @@ static inline int _new_post_send(struct resources_t *resource, uint16_t batch_si
 			ibv_wr_rdma_read(resource->eqp, resource->rkey, resource->raddr);
 			break;
 		case IBV_WR_ATOMIC_FETCH_AND_ADD:
-			ibv_wr_atomic_fetch_add(resource->eqp, resource->rkey, resource->raddr, 0xFAFAFAFA);
+			if (config.ext_atomic)
+				mlx5dv_wr_atomic_fetch_add(resource->dv_qp, resource->rkey,
+							   resource->raddr, (uint16_t)config.msg_sz,
+							   resource->atomic_args, resource->atomic_args + config.msg_sz);
+			else
+				ibv_wr_atomic_fetch_add(resource->eqp, resource->rkey, resource->raddr, 0xFAFAFAFA);
 			break;
 		case IBV_WR_ATOMIC_CMP_AND_SWP:
-			ibv_wr_atomic_cmp_swp(resource->eqp, resource->rkey, resource->raddr, 0xEEEEEEEE, 0xCCCCCCCC);
+			if (config.ext_atomic)
+				mlx5dv_wr_atomic_comp_swap(resource->dv_qp, resource->rkey,
+							   resource->raddr, (uint16_t)config.msg_sz,
+							   (struct mlx5dv_comp_swap *) resource->atomic_args);
+			else
+				ibv_wr_atomic_cmp_swp(resource->eqp, resource->rkey, resource->raddr, 0xEEEEEEEE, 0xCCCCCCCC);
 			break;
 		case IBV_WR_BIND_MW:
 		case IBV_WR_LOCAL_INV:

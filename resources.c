@@ -70,6 +70,34 @@ int resource_alloc(struct resources_t *resource)
 	}
 	memset(resource->recv_wr_arr, 0, size);
 
+	if (config.ext_atomic) {
+		if (config.opcode == IBV_WR_ATOMIC_FETCH_AND_ADD) {
+			resource->atomic_args = calloc(2, config.msg_sz);
+			if (!resource->atomic_args) {
+				VL_MEM_ERR((" Fail in alloc atomic_args"));
+				return FAIL;
+			}
+		} else {
+			struct mlx5dv_comp_swap *args;
+
+			resource->atomic_args = calloc(1, sizeof(struct mlx5dv_comp_swap));
+			if (!resource->atomic_args) {
+				VL_MEM_ERR((" Fail in alloc atomic_args"));
+				return FAIL;
+			}
+			args = resource->atomic_args;
+
+			args->swap_val = calloc(4, config.msg_sz);
+			if (!args->swap_val) {
+				VL_MEM_ERR((" Fail in alloc atomic_args"));
+				return FAIL;
+			}
+			args->compare_val = args->swap_val + config.msg_sz;
+			args->swap_mask = args->swap_val + 2 * config.msg_sz;
+			args->compare_mask = args->swap_val + 3 * config.msg_sz;
+		}
+	}
+
 	VL_MEM_TRACE((" resource alloc finish."));
 	return SUCCESS;
 }
@@ -99,6 +127,7 @@ static int init_socket(struct resources_t *resource)
 static int init_hca(struct resources_t *resource)
 {
 	struct ibv_device *ib_dev = NULL;
+	struct mlx5dv_context_attr ctx_attr;
 	struct ibv_device **dev_list;
 	int num_devices, i, rc;
 
@@ -128,9 +157,11 @@ static int init_hca(struct resources_t *resource)
 		return FAIL;
 	}
 
-	resource->hca_p->context = ibv_open_device(ib_dev);
+	memset(&ctx_attr, 0, sizeof(ctx_attr));
+	ctx_attr.flags = MLX5DV_CONTEXT_FLAGS_DEVX;
+	resource->hca_p->context = mlx5dv_open_device(ib_dev, &ctx_attr);
 	if (!resource->hca_p->context) {
-		VL_HCA_ERR(("ibv_open_device with HCA ID %s failed",
+		VL_HCA_ERR(("mlx5dv_open_device with HCA ID %s failed",
 				config.hca_type));
 		ibv_free_device_list(dev_list);
 		return FAIL;
@@ -147,6 +178,24 @@ static int init_hca(struct resources_t *resource)
 		return FAIL;
 	}
 	VL_HCA_TRACE1(("HCA was queried"));
+
+	if (config.ext_atomic) {
+		struct mlx5dv_context dv_attr;
+
+		memset(&dv_attr, 0, sizeof(dv_attr));
+
+		dv_attr.comp_mask = MLX5DV_CONTEXT_MASK_ATOMICS;
+		rc = mlx5dv_query_device(resource->hca_p->context, &dv_attr);
+		if (rc) {
+			VL_HCA_ERR(("mlx5dv_query_device failed"));
+			return FAIL;
+		}
+		VL_HCA_TRACE1(("mlx5dv HCA was queried"));
+
+		if (dv_attr.comp_mask & MLX5DV_CONTEXT_MASK_ATOMICS)
+			VL_HCA_TRACE1(("arg_size_mask=0x%x arg_size_mask_dc=0x%x", dv_attr.atomics_caps.arg_size_mask,
+					dv_attr.atomics_caps.arg_size_mask_dc));
+	}
 
 	rc = ibv_query_port(resource->hca_p->context, IB_PORT, &resource->hca_p->port_attr);
 	if (rc) {
@@ -287,19 +336,12 @@ static int init_srq(struct resources_t *resource)
 static int init_qp(struct resources_t *resource)
 {
 	struct ibv_qp_init_attr *attr;
-	struct ibv_qp_init_attr attr_leg;
 	struct ibv_qp_init_attr_ex attr_ex;
 	struct mlx5dv_qp_init_attr attr_dv;
 
-	if (config.send_method || config.qp_type == IBV_QPT_DRIVER ||
-	    config.qp_type == IBV_QPT_XRC_RECV) {
-		memset(&attr_dv, 0, sizeof(attr_dv));
-		memset(&attr_ex, 0, sizeof(attr_ex));
-		attr = (struct ibv_qp_init_attr *)&attr_ex;
-	} else {
-		memset(&attr_leg, 0, sizeof(attr_leg));
-		attr = &attr_leg;
-	}
+	memset(&attr_dv, 0, sizeof(attr_dv));
+	memset(&attr_ex, 0, sizeof(attr_ex));
+	attr = (struct ibv_qp_init_attr *)&attr_ex;
 
 	attr->qp_type = config.qp_type;
 	VL_DATA_TRACE1(("Going to create QP type %s:", VL_ibv_qp_type_str(config.qp_type)));
@@ -333,7 +375,7 @@ static int init_qp(struct resources_t *resource)
 				attr->cap.max_inline_data));
 	}
 
-	if (config.send_method) { // And correspondingly a client
+	if (!config.is_daemon) {
 		attr_ex.comp_mask |= IBV_QP_INIT_ATTR_SEND_OPS_FLAGS | IBV_QP_INIT_ATTR_PD;
 
 		if(0);
@@ -347,9 +389,9 @@ static int init_qp(struct resources_t *resource)
 			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_RDMA_WRITE_WITH_IMM;
 		else if (config.opcode == IBV_WR_RDMA_READ)
 			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_RDMA_READ;
-		else if (config.opcode == IBV_WR_ATOMIC_FETCH_AND_ADD)
+		else if (config.opcode == IBV_WR_ATOMIC_FETCH_AND_ADD && !config.ext_atomic)
 			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_ATOMIC_FETCH_AND_ADD;
-		else if (config.opcode == IBV_WR_ATOMIC_CMP_AND_SWP)
+		else if (config.opcode == IBV_WR_ATOMIC_CMP_AND_SWP && !config.ext_atomic)
 			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_ATOMIC_CMP_AND_SWP;
 		else if (config.opcode == IBV_WR_BIND_MW)
 			attr_ex.send_ops_flags |= IBV_QP_EX_WITH_BIND_MW;
@@ -365,27 +407,44 @@ static int init_qp(struct resources_t *resource)
 					     MLX5DV_QP_INIT_ATTR_MASK_QP_CREATE_FLAGS;
 			attr_dv.create_flags |= MLX5DV_QP_CREATE_DISABLE_SCATTER_TO_CQE; /*driver doesnt support scatter2cqe data-path on DCI yet*/
 			attr_dv.dc_init_attr.dc_type = MLX5DV_DCTYPE_DCI;
+		}
+
+		if (config.ext_atomic) {
+			attr_dv.comp_mask |= MLX5DV_QP_INIT_ATTR_MASK_SEND_OPS_FLAGS |
+					     MLX5DV_QP_INIT_ATTR_MASK_QP_CREATE_FLAGS;
+			attr_dv.create_flags |= MLX5DV_QP_CREATE_DISABLE_SCATTER_TO_CQE; /*driver doesnt support scatter2cqe data-path for ext atomic yet*/
+			attr_dv.send_ops_flags |= MLX5DV_QP_EX_WITH_ATOMIC;
+			attr_dv.comp_mask |= MLX5DV_QP_INIT_ATTR_MASK_ATOMIC_ARG;
+			attr_dv.max_atomic_arg = config.msg_sz;
+		}
+
+		if (config.qp_type == IBV_QPT_DRIVER || config.ext_atomic) {
 			resource->qp = mlx5dv_create_qp(resource->hca_p->context, &attr_ex, &attr_dv);
 		} else {
 			resource->qp = ibv_create_qp_ex(resource->hca_p->context, &attr_ex);
 		}
-	} else { // A server or a client with legacy API
+	} else {
+		attr_ex.comp_mask |= IBV_QP_INIT_ATTR_PD;
+		attr_ex.pd = resource->pd;
+
+		if (config.ext_atomic) {
+			attr_dv.comp_mask |= MLX5DV_QP_INIT_ATTR_MASK_ATOMIC_ARG;
+			attr_dv.max_atomic_arg = config.msg_sz;
+		}
+
+		if (config.qp_type == IBV_QPT_XRC_RECV) {
+			attr_ex.comp_mask |= IBV_QP_INIT_ATTR_XRCD;
+			attr_ex.xrcd = resource->xrcd;
+		}
+
 		if (config.qp_type == IBV_QPT_DRIVER) {
-			attr_ex.comp_mask |= IBV_QP_INIT_ATTR_PD;
-			attr_ex.pd = resource->pd;
 			attr_ex.srq = resource->srq;
 			attr_dv.comp_mask |= MLX5DV_QP_INIT_ATTR_MASK_DC;
 			attr_dv.dc_init_attr.dc_type = MLX5DV_DCTYPE_DCT;
 			attr_dv.dc_init_attr.dct_access_key = DC_KEY;
-			resource->qp = mlx5dv_create_qp(resource->hca_p->context, &attr_ex, &attr_dv);
-		} else if (config.qp_type == IBV_QPT_XRC_RECV) {
-			attr_ex.comp_mask |= IBV_QP_INIT_ATTR_PD | IBV_QP_INIT_ATTR_XRCD;
-			attr_ex.pd = resource->pd;
-			attr_ex.xrcd = resource->xrcd;
-			resource->qp = ibv_create_qp_ex(resource->hca_p->context, &attr_ex);
-		} else {
-			resource->qp = ibv_create_qp(resource->pd, &attr_leg);
 		}
+
+		resource->qp = mlx5dv_create_qp(resource->hca_p->context, &attr_ex, &attr_dv);
 	}
 
 	if (!resource->qp) {
@@ -402,7 +461,7 @@ static int init_qp(struct resources_t *resource)
 
 	if (config.send_method) {
 		resource->eqp = ibv_qp_to_qp_ex(resource->qp);
-		if (config.qp_type == IBV_QPT_DRIVER)
+		if (config.qp_type == IBV_QPT_DRIVER || config.ext_atomic)
 			resource->dv_qp = mlx5dv_qp_ex_from_ibv_qp_ex(resource->eqp);
 	}
 
@@ -662,6 +721,12 @@ int resource_destroy(struct resources_t *resource)
 		VL_FREE(resource->recv_wr_arr);
 	if (resource->sge_arr)
 		VL_FREE(resource->sge_arr);
+	if (resource->atomic_args) {
+		if (config.ext_atomic && config.opcode == IBV_WR_ATOMIC_CMP_AND_SWP)
+			VL_FREE(((struct mlx5dv_comp_swap *)resource->atomic_args)->swap_val);
+
+		VL_FREE(resource->atomic_args);
+	}
 	if (resource->data_buf_arr)
 		VL_FREE(resource->data_buf_arr);
 
